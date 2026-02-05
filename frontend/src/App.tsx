@@ -1,90 +1,79 @@
-import { useState } from 'react';
-import { Sidebar } from '@/components/Sidebar';
-import { Header } from '@/components/Header';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from '@/components/ui/sonner';
+import { Login } from '@/pages/Login';
+import { Register } from '@/pages/Register';
 import { Dashboard } from '@/pages/Dashboard';
 import { Employees } from '@/pages/Employees';
 import { Attendance } from '@/pages/Attendance';
 import { LeaveRequests } from '@/pages/LeaveRequests';
 import { Reports } from '@/pages/Reports';
 import { Settings } from '@/pages/Settings';
-import { Toaster } from '@/components/ui/sonner';
-import type { Department, Employee, AttendanceRecord, LeaveRequest } from '@/types';
-import { departments, employees, attendanceRecords, leaveRequests } from '@/data/mockData';
-
-type Page = 'dashboard' | 'employees' | 'attendance' | 'leaves' | 'reports' | 'settings';
+import { Layout } from '@/components/Layout';
+import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { NotFound } from '@/pages/NotFound';
+import { Unauthorized } from '@/pages/Unauthorized';
+import { getUserRole } from '@/utils/auth';
 
 function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  
-  // App state that would come from API in real app
-  const [departmentsData] = useState<Department[]>(departments);
-  const [employeesData] = useState<Employee[]>(employees);
-  const [attendanceData] = useState<AttendanceRecord[]>(attendanceRecords);
-  const [leaveRequestsData] = useState<LeaveRequest[]>(leaveRequests);
-
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'dashboard':
-        return <Dashboard 
-          employees={employeesData} 
-          attendanceRecords={attendanceData}
-          leaveRequests={leaveRequestsData}
-        />;
-      case 'employees':
-        return <Employees 
-          employees={employeesData} 
-          departments={departmentsData} 
-        />;
-      case 'attendance':
-        return <Attendance 
-          attendanceRecords={attendanceData}
-          employees={employeesData}
-        />;
-      case 'leaves':
-        return <LeaveRequests 
-          leaveRequests={leaveRequestsData}
-          employees={employeesData}
-        />;
-      case 'reports':
-        return <Reports 
-          employees={employeesData}
-          attendanceRecords={attendanceData}
-          departments={departmentsData}
-        />;
-      case 'settings':
-        return <Settings />;
-      default:
-        return <Dashboard 
-          employees={employeesData} 
-          attendanceRecords={attendanceData}
-          leaveRequests={leaveRequestsData}
-        />;
-    }
-  };
-
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar 
-        currentPage={currentPage} 
-        onPageChange={setCurrentPage}
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-      
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <Header 
-          onMenuClick={() => setSidebarOpen(true)}
-          pageTitle={currentPage.charAt(0).toUpperCase() + currentPage.slice(1)}
-        />
-        
-        <main className="flex-1 overflow-y-auto">
-          {renderPage()}
-        </main>
-      </div>
+    <BrowserRouter>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+
+        {/* Protected Routes with Layout */}
+        <Route
+          element={
+            <ProtectedRoute>
+              <Layout />
+            </ProtectedRoute>
+          }
+        >
+          {/* All Authenticated Users - Dashboard, Leaves, Reports */}
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/leaves" element={<LeaveRequests />} />
+          <Route path="/reports" element={<Reports />} />
+
+          {/* Admin & Manager Only Routes */}
+          <Route 
+            path="/employees" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                <Employees />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/attendance" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                <Attendance />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/settings" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'manager']}>
+                <Settings />
+              </ProtectedRoute>
+            } 
+          />
+        </Route>
+
+        {/* Redirect root to dashboard for all users */}
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+
+        {/* Unauthorized Access Page */}
+        <Route path="/unauthorized" element={<Unauthorized />} />
+
+        {/* 404 Not Found */}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
       
       <Toaster position="top-right" />
-    </div>
+    </BrowserRouter>
   );
 }
 

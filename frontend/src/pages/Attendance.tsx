@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Calendar, 
   Search, 
@@ -7,7 +7,9 @@ import {
   MapPin,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,44 +30,82 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { AttendanceRecord, Employee } from '@/types';
-
-interface AttendanceProps {
-  attendanceRecords: AttendanceRecord[];
-  employees: Employee[];
-}
+import { attendanceAPI, employeeAPI, type AttendanceRecord, type Employee } from '@/services/api';
+import { toast } from 'sonner';
 
 type ViewMode = 'records' | 'logs';
 
-export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
+export function Attendance() {
   const [viewMode, setViewMode] = useState<ViewMode>('records');
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
+  // Fetch data from API
+  useEffect(() => {
+    fetchData();
+  }, [selectedDate, selectedStatus]);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch employees
+      const employeeData = await employeeAPI.getActive();
+      setEmployees(employeeData);
+
+      // Build attendance query params
+      const params: any = {};
+      if (selectedDate) {
+        params.date = selectedDate;
+      }
+      if (selectedStatus !== 'all') {
+        params.status = selectedStatus;
+      }
+
+      // Fetch attendance records
+      const attendanceData = await attendanceAPI.getAll(params);
+      setAttendanceRecords(attendanceData.results);
+
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load attendance data');
+      toast.error('Failed to load attendance data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const filteredRecords = attendanceRecords.filter(record => {
-    const employee = employees.find(emp => emp.id === record.employeeId);
-    const matchesSearch = employee && (
-      employee.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      employee.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      employee.employeeCode.toLowerCase().includes(searchTerm.toLowerCase())
+    if (!searchTerm) return true;
+    
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      record.employee_name?.toLowerCase().includes(searchLower) ||
+      record.employee_code?.toLowerCase().includes(searchLower)
     );
-    const matchesStatus = selectedStatus === 'all' || record.status === selectedStatus;
-    const matchesDate = selectedDate === '' || record.date === selectedDate;
-    return matchesSearch && matchesStatus && matchesDate;
   });
 
   const getEmployeeName = (employeeId: number) => {
     const employee = employees.find(emp => emp.id === employeeId);
-    return employee ? `${employee.firstName} ${employee.lastName}` : 'Unknown';
+    return employee ? employee.full_name : 'Unknown';
   };
 
   const getEmployeeCode = (employeeId: number) => {
     const employee = employees.find(emp => emp.id === employeeId);
-    return employee?.employeeCode || 'N/A';
+    return employee?.employee_code || 'N/A';
   };
 
-  const getStatusIcon = (status?: string) => {
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+
+  const getStatusIcon = (status?: string | null) => {
     switch (status) {
       case 'Present':
         return <CheckCircle className="w-4 h-4 text-green-500" />;
@@ -80,7 +120,7 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
     }
   };
 
-  const getStatusBadgeVariant = (status?: string) => {
+  const getStatusBadgeVariant = (status?: string | null) => {
     switch (status) {
       case 'Present':
         return 'bg-green-100 text-green-800 hover:bg-green-100';
@@ -95,8 +135,56 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
     }
   };
 
+  const formatTime = (time: string | null) => {
+    if (!time) return '--:--';
+    return time.substring(0, 5);
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+  };
+
+  const formatHours = (hours: number | null) => {
+    if (!hours) return '--';
+    return `${hours.toFixed(1)}h`;
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <Loader2 className="w-16 h-16 animate-spin text-blue-600 mx-auto" />
+          <p className="mt-4 text-lg text-gray-600">Loading attendance data...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-red-800">Error loading attendance</p>
+            <p className="text-xs text-red-600 mt-1">{error}</p>
+          </div>
+          <Button 
+            size="sm" 
+            variant="outline" 
+            onClick={fetchData}
+            className="border-red-300 text-red-600 hover:bg-red-100"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -104,24 +192,37 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
           <p className="text-gray-500 mt-1">View and manage attendance records</p>
         </div>
         
-        {/* View Mode Toggle */}
-        <div className="flex bg-gray-100 rounded-lg p-1">
+        <div className="flex items-center gap-3">
+          {/* Refresh Button */}
           <Button
-            variant={viewMode === 'records' ? 'default' : 'ghost'}
+            variant="outline"
             size="sm"
-            onClick={() => setViewMode('records')}
-            className={viewMode === 'records' ? 'bg-white shadow-sm' : ''}
+            onClick={fetchData}
+            className="border-gray-200"
           >
-            Records
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Refresh
           </Button>
-          <Button
-            variant={viewMode === 'logs' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => setViewMode('logs')}
-            className={viewMode === 'logs' ? 'bg-white shadow-sm' : ''}
-          >
-            Logs
-          </Button>
+
+          {/* View Mode Toggle */}
+          <div className="flex bg-gray-100 rounded-lg p-1">
+            <Button
+              variant={viewMode === 'records' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setViewMode('records')}
+              className={viewMode === 'records' ? 'bg-white shadow-sm' : ''}
+            >
+              Records
+            </Button>
+            <Button
+              variant={viewMode === 'logs' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setViewMode('logs')}
+              className={viewMode === 'logs' ? 'bg-white shadow-sm' : ''}
+            >
+              Logs
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -134,7 +235,7 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
             <Input 
-              placeholder="Search employee..." 
+              placeholder="Search employee by name or code..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10"
@@ -177,81 +278,98 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Sign In</TableHead>
-                  <TableHead>Sign Out</TableHead>
-                  <TableHead>Total Hours</TableHead>
-                  <TableHead>Overtime</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Remarks</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredRecords.map((record) => (
-                  <TableRow key={record.id} className="hover:bg-gray-50">
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                          {getEmployeeName(record.employeeId).split(' ').map(n => n[0]).join('')}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{getEmployeeName(record.employeeId)}</p>
-                          <p className="text-xs text-gray-500">{getEmployeeCode(record.employeeId)}</p>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600">
-                        {new Date(record.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-gray-400" />
-                        <span className="text-sm text-gray-600">
-                          {record.signInTime ? record.signInTime.substring(0, 5) : '--:--'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-gray-400" />
-                        <span className="text-sm text-gray-600">
-                          {record.signOutTime ? record.signOutTime.substring(0, 5) : '--:--'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600">
-                        {record.totalHours ? `${record.totalHours}h` : '--'}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600">
-                        {record.overtime ? `${record.overtime}h` : '--'}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={getStatusBadgeVariant(record.status)}>
-                        <div className="flex items-center gap-1">
-                          {getStatusIcon(record.status)}
-                          {record.status}
-                        </div>
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600">
-                        {record.remarks || '--'}
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {filteredRecords.length === 0 ? (
+              <div className="text-center py-12">
+                <Clock className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-500">No attendance records found</p>
+                <p className="text-sm text-gray-400 mt-2">Try adjusting your filters</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Sign In</TableHead>
+                      <TableHead>Sign Out</TableHead>
+                      <TableHead>Total Hours</TableHead>
+                      <TableHead>Overtime</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Remarks</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredRecords.map((record) => (
+                      <TableRow key={record.id} className="hover:bg-gray-50">
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                              {record.employee_name 
+                                ? getInitials(record.employee_name)
+                                : getInitials(getEmployeeName(record.employee))
+                              }
+                            </div>
+                            <div>
+                              <p className="text-sm font-medium text-gray-900">
+                                {record.employee_name || getEmployeeName(record.employee)}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {record.employee_code || getEmployeeCode(record.employee)}
+                              </p>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {formatDate(record.date)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-gray-400" />
+                            <span className="text-sm text-gray-600">
+                              {formatTime(record.sign_in_time)}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-gray-400" />
+                            <span className="text-sm text-gray-600">
+                              {formatTime(record.sign_out_time)}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {formatHours(record.total_hours)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {formatHours(record.overtime)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={getStatusBadgeVariant(record.status)}>
+                            <div className="flex items-center gap-1">
+                              {getStatusIcon(record.status)}
+                              {record.status || 'Unknown'}
+                            </div>
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {record.remarks || '--'}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -261,7 +379,7 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg font-medium text-gray-900">
-              Attendance Logs
+              Real-time Attendance Logs
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -269,6 +387,10 @@ export function Attendance({ attendanceRecords, employees }: AttendanceProps) {
               <MapPin className="w-12 h-12 text-gray-300 mx-auto mb-4" />
               <p className="text-gray-500">Real-time attendance logs would be displayed here</p>
               <p className="text-sm text-gray-400 mt-2">Connected to biometric devices for live data</p>
+              <Button className="mt-6 bg-blue-600 hover:bg-blue-700">
+                <Clock className="w-4 h-4 mr-2" />
+                View Live Feed
+              </Button>
             </div>
           </CardContent>
         </Card>

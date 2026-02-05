@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Users, 
   UserCheck, 
@@ -25,13 +26,17 @@ import {
   Pie,
   Cell
 } from 'recharts';
-import type { Employee, AttendanceRecord, LeaveRequest } from '@/types';
-import { attendanceAPI, type TrendData } from '@/services/api';
+import { attendanceAPI, employeeAPI, type TrendData, type Employee } from '@/services/api';
 
-interface DashboardProps {
-  employees: Employee[];
-  attendanceRecords: AttendanceRecord[];
-  leaveRequests: LeaveRequest[];
+interface LeaveRequest {
+  id: string;
+  employeeId: string;
+  leaveType: string;
+  fromDate: string;
+  toDate: string;
+  totalDays: number;
+  reason: string;
+  status: string;
 }
 
 const PIE_COLORS = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6'];
@@ -45,7 +50,8 @@ interface DashboardStats {
   attendanceRate: number;
 }
 
-export function Dashboard({ employees, leaveRequests }: DashboardProps) {
+export function Dashboard() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats>({
     totalEmployees: 0,
     presentToday: 0,
@@ -64,19 +70,28 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
     attendanceRate: 0,
   });
 
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [attendanceTrend, setAttendanceTrend] = useState<TrendData[]>([]);
   const [recentAttendance, setRecentAttendance] = useState<any[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch attendance data from API
+  // Fetch dashboard data from API
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // Fetch today's stats
+        // Fetch employees from API
+        const employeeData = await employeeAPI.getActive();
+        setEmployees(employeeData);
+
+        // Fetch employee statistics
+        const empStats = await employeeAPI.getStats();
+
+        // Fetch today's attendance stats
         const todayStats = await attendanceAPI.getTodayStats();
         
         // Fetch trend data
@@ -98,8 +113,13 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
         }));
         setRecentAttendance(recent);
 
-        // Calculate stats
-        const totalEmployees = employees.length || 100; // Fallback if employees not loaded
+        // Fetch leave requests if you have the API
+        // const leavesData = await leaveAPI.getAll();
+        // setLeaveRequests(leavesData.results || []);
+        setLeaveRequests([]); // Placeholder until you implement leave API
+
+        // Calculate stats using real data
+        const totalEmployees = empStats.active_employees;
         const attendanceRate = totalEmployees > 0 
           ? Math.round((todayStats.present / totalEmployees) * 100) 
           : 0;
@@ -117,14 +137,14 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
         console.error('Error fetching dashboard data:', err);
         setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
         
-        // Fallback to mock data
+        // Fallback to default values
         setStats({
-          totalEmployees: employees.length || 100,
-          presentToday: 85,
-          absentToday: 10,
-          lateToday: 5,
-          onLeaveToday: 8,
-          attendanceRate: 85,
+          totalEmployees: 0,
+          presentToday: 0,
+          absentToday: 0,
+          lateToday: 0,
+          onLeaveToday: 0,
+          attendanceRate: 0,
         });
       } finally {
         setLoading(false);
@@ -137,7 +157,7 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
     const interval = setInterval(fetchDashboardData, 5 * 60 * 1000);
     
     return () => clearInterval(interval);
-  }, [employees]);
+  }, []);
 
   // Animate stats on mount or when stats change
   useEffect(() => {
@@ -176,6 +196,16 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
   ];
 
   const pendingLeaves = leaveRequests.filter(req => req.status === 'Pending');
+
+  // Helper function to get employee by ID
+  const getEmployeeById = (employeeId: string | number) => {
+    return employees.find(emp => emp.id === Number(employeeId));
+  };
+
+  // Helper function to get initials
+  const getInitials = (firstName: string, lastName: string) => {
+    return `${firstName[0] || ''}${lastName[0] || ''}`.toUpperCase();
+  };
 
   // Loading state
   if (loading) {
@@ -429,7 +459,14 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg font-semibold text-gray-900">Recent Attendance</CardTitle>
-              <Button variant="ghost" size="sm" className="text-blue-600">View All</Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="text-blue-600"
+                onClick={() => navigate('/attendance')}
+              >
+                View All
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -438,8 +475,8 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
                 recentAttendance.map((record) => (
                   <div key={record.id} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gradient-to-br from-gray-300 to-gray-400 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                        {record.employeeName.split(' ').map((n: string) => n[0]).join('')}
+                      <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                        {record.employeeName.split(' ').map((n: string) => n[0]).join('').toUpperCase()}
                       </div>
                       <div>
                         <p className="text-sm font-medium text-gray-900">{record.employeeName}</p>
@@ -491,17 +528,17 @@ export function Dashboard({ employees, leaveRequests }: DashboardProps) {
             {pendingLeaves.length > 0 ? (
               <div className="space-y-3">
                 {pendingLeaves.slice(0, 5).map((request) => {
-                  const employee = employees.find(emp => emp.id === request.employeeId);
+                  const employee = getEmployeeById(request.employeeId);
                   return (
                     <div key={request.id} className="p-4 border border-gray-200 rounded-lg">
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-gray-300 to-gray-400 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                            {employee ? `${employee.firstName[0]}${employee.lastName[0]}` : '??'}
+                          <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-purple-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                            {employee ? getInitials(employee.first_name, employee.last_name) : '??'}
                           </div>
                           <div>
                             <p className="text-sm font-medium text-gray-900">
-                              {employee ? `${employee.firstName} ${employee.lastName}` : 'Unknown'}
+                              {employee ? employee.full_name : 'Unknown'}
                             </p>
                             <p className="text-xs text-gray-500">{request.leaveType}</p>
                           </div>

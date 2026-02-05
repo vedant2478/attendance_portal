@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Download, 
   FileText, 
@@ -6,7 +6,9 @@ import {
   BarChart3,
   Users,
   Clock,
-  UserCheck
+  UserCheck,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,44 +31,213 @@ import {
   BarChart,
   Bar
 } from 'recharts';
-import type { Employee, AttendanceRecord, Department } from '@/types';
-import { attendanceTrend } from '@/data/mockData';
+import { attendanceAPI, employeeAPI, type Employee, type TrendData } from '@/services/api';
+import { toast } from 'sonner';
 
-interface ReportsProps {
-  employees: Employee[];
-  attendanceRecords: AttendanceRecord[];
-  departments: Department[];
+interface Department {
+  id: number;
+  dept_name: string;
+  location?: string;
+  manager_name?: string;
 }
 
-export function Reports({ employees, attendanceRecords, departments }: ReportsProps) {
+interface DepartmentStat {
+  name: string;
+  employees: number;
+  present: number;
+  attendanceRate: number;
+}
+
+interface EmployeeReport {
+  id: number;
+  name: string;
+  department: string;
+  daysPresent: number;
+  daysAbsent: number;
+  lateDays: number;
+  totalDays: number;
+  attendanceRate: number;
+}
+
+// Mock departments - replace when department API is ready
+const MOCK_DEPARTMENTS: Department[] = [
+  { id: 1, dept_name: 'Engineering', location: 'Building A' },
+  { id: 2, dept_name: 'Human Resources', location: 'Building B' },
+  { id: 3, dept_name: 'Sales', location: 'Building C' },
+  { id: 4, dept_name: 'Marketing', location: 'Building D' },
+  { id: 5, dept_name: 'Finance', location: 'Building E' },
+];
+
+export function Reports() {
   const [reportType, setReportType] = useState<string>('attendance-summary');
   const [dateRange, setDateRange] = useState<string>('this-month');
   const [department, setDepartment] = useState<string>('all');
+  const [exportFormat, setExportFormat] = useState<string>('pdf');
+  
+  const [departments] = useState<Department[]>(MOCK_DEPARTMENTS);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [attendanceTrend, setAttendanceTrend] = useState<TrendData[]>([]);
+  const [departmentStats, setDepartmentStats] = useState<DepartmentStat[]>([]);
+  const [employeeReports, setEmployeeReports] = useState<EmployeeReport[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Calculate department-wise attendance
-  const departmentStats = departments.map(dept => {
-    const deptEmployees = employees.filter(emp => emp.deptId === dept.id);
-    const deptRecords = attendanceRecords.filter(record => 
-      deptEmployees.some(emp => emp.id === record.employeeId)
-    );
-    const presentRecords = deptRecords.filter(r => r.status === 'Present').length;
-    const totalRecords = deptRecords.length;
-    
-    return {
-      name: dept.deptName,
-      employees: deptEmployees.length,
-      present: presentRecords,
-      attendanceRate: totalRecords > 0 ? Math.round((presentRecords / totalRecords) * 100) : 0,
-    };
+  // Summary stats
+  const [summaryStats, setSummaryStats] = useState({
+    totalEmployees: 0,
+    avgAttendance: 0,
+    totalOvertime: 0,
+    leaveDays: 0,
   });
 
-  const handleDownload = () => {
-    // In a real app, this would generate and download a report
-    alert('Report download functionality would be implemented here');
+  useEffect(() => {
+    fetchReportData();
+  }, [dateRange, department]);
+
+  const fetchReportData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch employees
+      const employeeData = await employeeAPI.getActive();
+      setEmployees(employeeData);
+
+      // Fetch employee stats
+      const empStats = await employeeAPI.getStats();
+
+      // Fetch attendance trend
+      const days = dateRange === 'this-week' ? 7 : 30;
+      const trendData = await attendanceAPI.getTrend(days);
+      setAttendanceTrend(trendData);
+
+      // Fetch all attendance records for calculations
+      const attendanceData = await attendanceAPI.getAll();
+      const allRecords = attendanceData.results;
+
+      // Calculate department-wise stats
+      const deptStats: DepartmentStat[] = departments.map(dept => {
+        const deptEmployees = employeeData.filter(emp => emp.dept === dept.id);
+        const deptRecords = allRecords.filter(record => 
+          deptEmployees.some(emp => emp.id === record.employee)
+        );
+        const presentRecords = deptRecords.filter(r => r.status === 'Present').length;
+        const totalRecords = deptRecords.length;
+        
+        return {
+          name: dept.dept_name,
+          employees: deptEmployees.length,
+          present: presentRecords,
+          attendanceRate: totalRecords > 0 ? Math.round((presentRecords / totalRecords) * 100) : 0,
+        };
+      });
+      setDepartmentStats(deptStats);
+
+      // Calculate employee-wise reports
+      const empReports: EmployeeReport[] = employeeData.slice(0, 10).map(emp => {
+        const empRecords = allRecords.filter(r => r.employee === emp.id);
+        const present = empRecords.filter(r => r.status === 'Present').length;
+        const absent = empRecords.filter(r => r.status === 'Absent').length;
+        const late = empRecords.filter(r => r.status === 'Late').length;
+        const total = empRecords.length;
+        
+        const dept = departments.find(d => d.id === emp.dept);
+        
+        return {
+          id: emp.id,
+          name: emp.full_name,
+          department: dept?.dept_name || 'N/A',
+          daysPresent: present,
+          daysAbsent: absent,
+          lateDays: late,
+          totalDays: total,
+          attendanceRate: total > 0 ? Math.round((present / total) * 100) : 0,
+        };
+      });
+      setEmployeeReports(empReports);
+
+      // Calculate summary stats
+      const totalPresent = trendData.reduce((sum, day) => sum + day.present, 0);
+      const totalRecordsCount = trendData.reduce((sum, day) => 
+        sum + day.present + day.absent + day.late + day.on_leave, 0
+      );
+      const avgAttendance = totalRecordsCount > 0 
+        ? Math.round((totalPresent / totalRecordsCount) * 100) 
+        : 0;
+
+      const totalOvertime = allRecords.reduce((sum, record) => 
+        sum + (record.overtime || 0), 0
+      );
+
+      const leaveDays = allRecords.filter(r => r.status === 'On Leave').length;
+
+      setSummaryStats({
+        totalEmployees: empStats.active_employees,
+        avgAttendance,
+        totalOvertime: Math.round(totalOvertime),
+        leaveDays,
+      });
+
+    } catch (err) {
+      console.error('Error fetching report data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load report data');
+      toast.error('Failed to load report data');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const handleDownload = () => {
+    const reportName = reportType.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const rangeName = dateRange.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase());
+    
+    toast.success(`Downloading ${reportName} report (${rangeName}) as ${exportFormat.toUpperCase()}...`);
+    
+    // In a real app, this would generate and download the actual report file
+    console.log('Download Config:', {
+      reportType,
+      dateRange,
+      department,
+      format: exportFormat,
+    });
+  };
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <Loader2 className="w-16 h-16 animate-spin text-blue-600 mx-auto" />
+          <p className="mt-4 text-lg text-gray-600">Loading report data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-red-800">Error loading reports</p>
+            <p className="text-xs text-red-600 mt-1">{error}</p>
+          </div>
+          <Button 
+            size="sm" 
+            variant="outline" 
+            onClick={fetchReportData}
+            className="border-red-300 text-red-600 hover:bg-red-100"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -130,7 +301,7 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
                 <SelectItem value="all">All Departments</SelectItem>
                 {departments.map(dept => (
                   <SelectItem key={dept.id} value={dept.id.toString()}>
-                    {dept.deptName}
+                    {dept.dept_name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -138,7 +309,7 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
           </div>
           <div className="space-y-2">
             <Label>Format</Label>
-            <Select defaultValue="pdf">
+            <Select value={exportFormat} onValueChange={setExportFormat}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -179,7 +350,8 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
                     formatter={(value: number, name: string) => [
                       value, 
                       name === 'present' ? 'Present' : 
-                      name === 'absent' ? 'Absent' : 'Late'
+                      name === 'absent' ? 'Absent' : 
+                      name === 'late' ? 'Late' : 'On Leave'
                     ]}
                     labelFormatter={(label) => new Date(label).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                   />
@@ -228,7 +400,7 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-3xl font-bold text-gray-900">{employees.length}</span>
+            <span className="text-3xl font-bold text-gray-900">{summaryStats.totalEmployees}</span>
           </CardContent>
         </Card>
 
@@ -240,8 +412,8 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-3xl font-bold text-green-600">87%</span>
-            <p className="text-xs text-green-600 mt-1">+3% from last month</p>
+            <span className="text-3xl font-bold text-green-600">{summaryStats.avgAttendance}%</span>
+            <p className="text-xs text-green-600 mt-1">For selected period</p>
           </CardContent>
         </Card>
 
@@ -253,8 +425,8 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-3xl font-bold text-amber-600">142h</span>
-            <p className="text-xs text-amber-600 mt-1">This month</p>
+            <span className="text-3xl font-bold text-amber-600">{summaryStats.totalOvertime}h</span>
+            <p className="text-xs text-amber-600 mt-1">For selected period</p>
           </CardContent>
         </Card>
 
@@ -266,8 +438,8 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-3xl font-bold text-blue-600">24</span>
-            <p className="text-xs text-blue-600 mt-1">Approved this month</p>
+            <span className="text-3xl font-bold text-blue-600">{summaryStats.leaveDays}</span>
+            <p className="text-xs text-blue-600 mt-1">For selected period</p>
           </CardContent>
         </Card>
       </div>
@@ -294,46 +466,42 @@ export function Reports({ employees, attendanceRecords, departments }: ReportsPr
                 </tr>
               </thead>
               <tbody>
-                {employees.slice(0, 5).map((employee) => {
-                  const dept = departments.find(d => d.id === employee.deptId);
-                  const empRecords = attendanceRecords.filter(r => r.employeeId === employee.id);
-                  const present = empRecords.filter(r => r.status === 'Present').length;
-                  const absent = empRecords.filter(r => r.status === 'Absent').length;
-                  const late = empRecords.filter(r => r.status === 'Late').length;
-                  const total = empRecords.length;
-                  const attendanceRate = total > 0 ? Math.round((present / total) * 100) : 0;
-                  
-                  return (
-                    <tr key={employee.id} className="border-b border-gray-100">
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-xs">
-                            {employee.firstName[0]}{employee.lastName[0]}
-                          </div>
-                          <span className="text-sm text-gray-900">{employee.firstName} {employee.lastName}</span>
+                {employeeReports.map((report) => (
+                  <tr key={report.id} className="border-b border-gray-100">
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-xs">
+                          {getInitials(report.name)}
                         </div>
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-600">{dept?.deptName || 'N/A'}</td>
-                      <td className="py-3 px-4 text-sm text-gray-900">{present}</td>
-                      <td className="py-3 px-4 text-sm text-gray-900">{absent}</td>
-                      <td className="py-3 px-4 text-sm text-gray-900">{late}</td>
-                      <td className="py-3 px-4">
-                        <span className={`text-sm font-medium ${
-                          attendanceRate >= 90 ? 'text-green-600' : 
-                          attendanceRate >= 80 ? 'text-amber-600' : 
-                          'text-red-600'
-                        }`}>
-                          {attendanceRate}%
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        <span className="text-sm text-gray-900">{report.name}</span>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 text-sm text-gray-600">{report.department}</td>
+                    <td className="py-3 px-4 text-sm text-gray-900">{report.daysPresent}</td>
+                    <td className="py-3 px-4 text-sm text-gray-900">{report.daysAbsent}</td>
+                    <td className="py-3 px-4 text-sm text-gray-900">{report.lateDays}</td>
+                    <td className="py-3 px-4">
+                      <span className={`text-sm font-medium ${
+                        report.attendanceRate >= 90 ? 'text-green-600' : 
+                        report.attendanceRate >= 80 ? 'text-amber-600' : 
+                        'text-red-600'
+                      }`}>
+                        {report.attendanceRate}%
+                      </span>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
+          {employeeReports.length === 0 && (
+            <div className="text-center py-8">
+              <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500">No data available for the selected period</p>
+            </div>
+          )}
           <div className="mt-4 flex justify-center">
-            <Button variant="outline" className="border-gray-200">
+            <Button variant="outline" className="border-gray-200" onClick={handleDownload}>
               Generate Full Report
             </Button>
           </div>
