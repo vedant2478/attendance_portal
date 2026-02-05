@@ -2,13 +2,14 @@ import json
 import pickle
 import secrets
 from datetime import date
-
+from attendance.models import  Attendance  
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db.models import Q, Count, F
 from django.utils import timezone
+from attendance.serializers import AttendanceSerializer 
 
 from .models import Employee, Department, User
 from .serializers import (
@@ -624,4 +625,70 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             'message': 'Face encoding deleted successfully',
             'employee_id': employee.id,
             'employee_code': employee.employee_code
+        }, status=status.HTTP_200_OK)
+    @action(detail=False, methods=['get'])
+    def get_attendance_data_by_id(self, request):
+        """
+        Get employee data and attendance records by user ID
+        GET /api/employees/get_attendance_data_by_id/?user_id=1
+        """
+        user_id = request.query_params.get('user_id')
+        
+        if not user_id:
+            return Response({
+                'success': False,
+                'error': 'user_id parameter is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Find employee by user__id (lookup through foreign key)
+            employee = Employee.objects.select_related('dept', 'user').get(
+                user__id=user_id,
+                deleted_at__isnull=True
+            )
+        except Employee.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': f'No employee found for user ID {user_id}'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all attendance records for this employee
+        from attendance.models import Attendance  # ✅ Import model from models
+        from attendance.serializers import AttendanceSerializer  # ✅ Import serializer from serializers
+        
+        attendance_records = Attendance.objects.filter(
+            employee=employee
+        ).select_related('shift').order_by('-date')
+        
+        # Optional filtering
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        status_filter = request.query_params.get('status')
+        
+        if start_date:
+            attendance_records = attendance_records.filter(date__gte=start_date)
+        if end_date:
+            attendance_records = attendance_records.filter(date__lte=end_date)
+        if status_filter:
+            attendance_records = attendance_records.filter(status=status_filter)
+        
+        # Serialize employee data
+        employee_serializer = self.get_serializer(employee)
+        
+        # Serialize attendance data
+        attendance_serializer = AttendanceSerializer(attendance_records, many=True)
+        
+        # ✅ Fix: Properly serialize user data to avoid Role serialization issue
+        return Response({
+            'success': True,
+            'user': {
+                'id': employee.user.id,
+                'username': employee.user.username,
+                'email': employee.user.email if hasattr(employee.user, 'email') else None,
+                'role': employee.user.role if isinstance(employee.user.role, int) else employee.user.role.id if hasattr(employee.user.role, 'id') else None,
+                'role_name': str(employee.user.role_name) if hasattr(employee.user, 'role_name') else None,
+            },
+            'employee': employee_serializer.data,
+            'attendance_records': attendance_serializer.data,
+            'total_attendance_count': attendance_records.count()
         }, status=status.HTTP_200_OK)
