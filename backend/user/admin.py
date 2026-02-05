@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Role, User, Department, Employee, DepartmentEmployee, AuditTrail
+from .models import Role, User, Department, Employee, Notification
 
 
 @admin.register(Role)
@@ -14,25 +14,18 @@ class RoleAdmin(admin.ModelAdmin):
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     list_display = ('id', 'username', 'email', 'role', 'is_active', 'last_login_date', 'created_at')
-    search_fields = ('username', 'email', 'card_no')
+    search_fields = ('username', 'email')
     list_filter = ('is_active', 'role', 'created_at')
     readonly_fields = ('created_at', 'updated_at', 'last_login_date')
     fieldsets = (
         ('Basic Information', {
             'fields': ('username', 'email', 'password_hash', 'role', 'is_active')
         }),
-        ('Authentication Methods', {
-            'fields': ('pin_code', 'card_no')
-            # Removed 'fp_template' - BinaryField is not editable in forms
-        }),
         ('Timestamps', {
             'fields': ('last_login_date', 'created_at', 'updated_at', 'deleted_at')
         }),
     )
     ordering = ('-created_at',)
-    
-    # Exclude binary fields from the form
-    exclude = ('fp_template',)
 
 
 @admin.register(Department)
@@ -58,8 +51,8 @@ class EmployeeAdmin(admin.ModelAdmin):
             'fields': ('employee_code', 'dept', 'user', 'is_active')
         }),
         ('Biometric Data', {
-            'fields': ('photo_path',)
-            # Removed 'face_encoding' - BinaryField is not editable in forms
+            'fields': ('photo_path',),
+            'classes': ('collapse',)
         }),
         ('Validity Period', {
             'fields': ('validity_from', 'validity_to')
@@ -71,35 +64,43 @@ class EmployeeAdmin(admin.ModelAdmin):
     ordering = ('-created_at',)
     
     # Exclude binary fields from the form
-    exclude = ('face_encoding',)
+    exclude = ('face_encoding', 'biometric_encoding')
     
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
     get_full_name.short_description = 'Full Name'
 
 
-@admin.register(DepartmentEmployee)
-class DepartmentEmployeeAdmin(admin.ModelAdmin):
-    list_display = ('id', 'department', 'employee', 'get_employee_name')
-    search_fields = ('department__dept_name', 'employee__first_name', 'employee__last_name')
-    list_filter = ('department',)
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'user', 'page', 'is_read', 'created_at')
+    search_fields = ('title', 'body', 'user__username')
+    list_filter = ('is_read', 'created_at', 'page')
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('-created_at',)
+    date_hierarchy = 'created_at'
     
-    def get_employee_name(self, obj):
-        return f"{obj.employee.first_name} {obj.employee.last_name}"
-    get_employee_name.short_description = 'Employee Name'
-
-
-@admin.register(AuditTrail)
-class AuditTrailAdmin(admin.ModelAdmin):
-    list_display = ('id', 'timestamp', 'user', 'action_type', 'table_name', 'record_id', 'ip_address')
-    search_fields = ('action_type', 'table_name', 'description', 'ip_address')
-    list_filter = ('action_type', 'table_name', 'timestamp')
-    readonly_fields = ('timestamp',)
-    ordering = ('-timestamp',)
-    date_hierarchy = 'timestamp'
+    fieldsets = (
+        ('Notification Content', {
+            'fields': ('user', 'title', 'body', 'page')
+        }),
+        ('Status', {
+            'fields': ('is_read',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
     
-    def has_add_permission(self, request):
-        return False
+    # Actions for bulk operations
+    actions = ['mark_as_read', 'mark_as_unread']
     
-    def has_change_permission(self, request, obj=None):
-        return False
+    def mark_as_read(self, request, queryset):
+        updated = queryset.update(is_read=True)
+        self.message_user(request, f'{updated} notification(s) marked as read.')
+    mark_as_read.short_description = 'Mark selected as read'
+    
+    def mark_as_unread(self, request, queryset):
+        updated = queryset.update(is_read=False)
+        self.message_user(request, f'{updated} notification(s) marked as unread.')
+    mark_as_unread.short_description = 'Mark selected as unread'

@@ -22,9 +22,6 @@ class User(models.Model):
     username = models.CharField(max_length=50, unique=True)
     email = models.EmailField(max_length=100, unique=True, null=True, blank=True)
     password_hash = models.CharField(max_length=255, null=True, blank=True)
-    pin_code = models.CharField(max_length=10, null=True, blank=True)
-    card_no = models.CharField(max_length=50, null=True, blank=True)
-    fp_template = models.BinaryField(null=True, blank=True)
     role = models.ForeignKey(
         Role,
         on_delete=models.SET_NULL,
@@ -63,7 +60,7 @@ class Department(models.Model):
 
 
 class Employee(models.Model):
-    """Employee model with face recognition data"""
+    """Employee model with biometric data"""
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
     email = models.EmailField(max_length=100, unique=True, null=True, blank=True)
@@ -78,6 +75,11 @@ class Employee(models.Model):
     )
     photo_path = models.CharField(max_length=255, null=True, blank=True)
     face_encoding = models.BinaryField(null=True, blank=True)
+    biometric_encoding = models.BinaryField(
+        null=True, 
+        blank=True,
+        help_text="Stores fingerprint or other biometric template data"
+    )
     user = models.OneToOneField(
         User,
         on_delete=models.SET_NULL,
@@ -99,38 +101,29 @@ class Employee(models.Model):
         return f"{self.first_name} {self.last_name}"
 
 
-class DepartmentEmployee(models.Model):
-    """Many-to-many relationship between departments and employees"""
-    department = models.ForeignKey(
-        Department,
-        on_delete=models.CASCADE,
-        db_column="department_id"
-    )
-    employee = models.ForeignKey(
-        Employee,
-        on_delete=models.CASCADE,
-        db_column="employee_id"
-    )
-
-    class Meta:
-        db_table = "department_employees"
-
-
-class AuditTrail(models.Model):
-    """Audit trail for tracking user actions"""
-    timestamp = models.DateTimeField()
+class Notification(models.Model):
+    """Notification model for user alerts"""
     user = models.ForeignKey(
         User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE,
+        related_name="notifications",
         db_column="userId"
     )
-    action_type = models.CharField(max_length=50)
-    table_name = models.CharField(max_length=50, null=True, blank=True)
-    record_id = models.IntegerField(null=True, blank=True)
-    description = models.TextField(null=True, blank=True)
-    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    title = models.CharField(max_length=255)
+    body = models.TextField()
+    page = models.CharField(
+        max_length=100, 
+        null=True, 
+        blank=True,
+        help_text="Target page/route to navigate when notification is clicked"
+    )
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "audit_trail"
+        db_table = "notifications"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} - {self.user.username}"
