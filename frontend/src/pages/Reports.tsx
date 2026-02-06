@@ -31,7 +31,15 @@ import {
   BarChart,
   Bar
 } from 'recharts';
-import { attendanceAPI, employeeAPI, type Employee, type TrendData } from '@/services/api';
+import { 
+  attendanceAPI, 
+  employeeAPI, 
+  authAPI, 
+  type Employee, 
+  type TrendData, 
+  type AttendanceRecord,
+  type DepartmentAttendanceStats 
+} from '@/services/api';
 import { toast } from 'sonner';
 
 interface Department {
@@ -69,6 +77,9 @@ const MOCK_DEPARTMENTS: Department[] = [
 ];
 
 export function Reports() {
+  const currentUser = authAPI.getCurrentUser();
+  const isAdmin = currentUser?.role === 2;
+
   const [reportType, setReportType] = useState<string>('attendance-summary');
   const [dateRange, setDateRange] = useState<string>('this-month');
   const [department, setDepartment] = useState<string>('all');
@@ -76,9 +87,11 @@ export function Reports() {
   
   const [departments] = useState<Department[]>(MOCK_DEPARTMENTS);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(null);
   const [attendanceTrend, setAttendanceTrend] = useState<TrendData[]>([]);
   const [departmentStats, setDepartmentStats] = useState<DepartmentStat[]>([]);
   const [employeeReports, setEmployeeReports] = useState<EmployeeReport[]>([]);
+  const [userAttendanceRecords, setUserAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,91 +105,58 @@ export function Reports() {
 
   useEffect(() => {
     fetchReportData();
-  }, [dateRange, department]);
+  }, [dateRange, department, isAdmin]);
+
+  // Helper function to get date range
+  const getDateRange = () => {
+    const today = new Date();
+    let startDate = '';
+    let endDate = today.toISOString().split('T')[0];
+
+    switch (dateRange) {
+      case 'today':
+        startDate = endDate;
+        break;
+      case 'this-week':
+        const weekStart = new Date(today);
+        weekStart.setDate(today.getDate() - 7);
+        startDate = weekStart.toISOString().split('T')[0];
+        break;
+      case 'this-month':
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        startDate = monthStart.toISOString().split('T')[0];
+        break;
+      case 'last-month':
+        const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+        startDate = lastMonthStart.toISOString().split('T')[0];
+        endDate = lastMonthEnd.toISOString().split('T')[0];
+        break;
+      case 'this-year':
+        const yearStart = new Date(today.getFullYear(), 0, 1);
+        startDate = yearStart.toISOString().split('T')[0];
+        break;
+      default:
+        const defaultStart = new Date(today);
+        defaultStart.setDate(today.getDate() - 30);
+        startDate = defaultStart.toISOString().split('T')[0];
+    }
+
+    return { startDate, endDate };
+  };
 
   const fetchReportData = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      // Fetch employees
-      const employeeData = await employeeAPI.getActive();
-      setEmployees(employeeData);
-
-      // Fetch employee stats
-      const empStats = await employeeAPI.getStats();
-
-      // Fetch attendance trend
-      const days = dateRange === 'this-week' ? 7 : 30;
-      const trendData = await attendanceAPI.getTrend(days);
-      setAttendanceTrend(trendData);
-
-      // Fetch all attendance records for calculations
-      const attendanceData = await attendanceAPI.getAll();
-      const allRecords = attendanceData.results;
-
-      // Calculate department-wise stats
-      const deptStats: DepartmentStat[] = departments.map(dept => {
-        const deptEmployees = employeeData.filter(emp => emp.dept === dept.id);
-        const deptRecords = allRecords.filter(record => 
-          deptEmployees.some(emp => emp.id === record.employee)
-        );
-        const presentRecords = deptRecords.filter(r => r.status === 'Present').length;
-        const totalRecords = deptRecords.length;
-        
-        return {
-          name: dept.dept_name,
-          employees: deptEmployees.length,
-          present: presentRecords,
-          attendanceRate: totalRecords > 0 ? Math.round((presentRecords / totalRecords) * 100) : 0,
-        };
-      });
-      setDepartmentStats(deptStats);
-
-      // Calculate employee-wise reports
-      const empReports: EmployeeReport[] = employeeData.slice(0, 10).map(emp => {
-        const empRecords = allRecords.filter(r => r.employee === emp.id);
-        const present = empRecords.filter(r => r.status === 'Present').length;
-        const absent = empRecords.filter(r => r.status === 'Absent').length;
-        const late = empRecords.filter(r => r.status === 'Late').length;
-        const total = empRecords.length;
-        
-        const dept = departments.find(d => d.id === emp.dept);
-        
-        return {
-          id: emp.id,
-          name: emp.full_name,
-          department: dept?.dept_name || 'N/A',
-          daysPresent: present,
-          daysAbsent: absent,
-          lateDays: late,
-          totalDays: total,
-          attendanceRate: total > 0 ? Math.round((present / total) * 100) : 0,
-        };
-      });
-      setEmployeeReports(empReports);
-
-      // Calculate summary stats
-      const totalPresent = trendData.reduce((sum, day) => sum + day.present, 0);
-      const totalRecordsCount = trendData.reduce((sum, day) => 
-        sum + day.present + day.absent + day.late + day.on_leave, 0
-      );
-      const avgAttendance = totalRecordsCount > 0 
-        ? Math.round((totalPresent / totalRecordsCount) * 100) 
-        : 0;
-
-      const totalOvertime = allRecords.reduce((sum, record) => 
-        sum + (record.overtime || 0), 0
-      );
-
-      const leaveDays = allRecords.filter(r => r.status === 'On Leave').length;
-
-      setSummaryStats({
-        totalEmployees: empStats.active_employees,
-        avgAttendance,
-        totalOvertime: Math.round(totalOvertime),
-        leaveDays,
-      });
+      if (isAdmin) {
+        // ADMIN VIEW - Fetch all data
+        await fetchAdminReports();
+      } else {
+        // USER VIEW - Fetch only user's data
+        await fetchUserReports();
+      }
 
     } catch (err) {
       console.error('Error fetching report data:', err);
@@ -184,6 +164,216 @@ export function Reports() {
       toast.error('Failed to load report data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAdminReports = async () => {
+    const { startDate, endDate } = getDateRange();
+
+    // Fetch employees
+    const employeeData = await employeeAPI.getActive();
+    setEmployees(employeeData);
+
+    // Fetch employee stats
+    const empStats = await employeeAPI.getStats();
+
+    // Fetch attendance trend
+    const days = dateRange === 'this-week' ? 7 : 30;
+    const trendData = await attendanceAPI.getTrend(days);
+    setAttendanceTrend(trendData);
+
+    // ✅ Use new department attendance API
+    const deptAttendanceResponse = await attendanceAPI.getByDepartment({
+      start_date: startDate,
+      end_date: endDate,
+    });
+
+    // Transform API response to match UI interface
+    const deptStats: DepartmentStat[] = deptAttendanceResponse.data.map((dept: DepartmentAttendanceStats) => ({
+      name: dept.department_name,
+      employees: dept.total_employees,
+      present: dept.present_count,
+      attendanceRate: dept.attendance_rate,
+    }));
+    setDepartmentStats(deptStats);
+
+    // Fetch all attendance records for employee reports
+    const attendanceData = await attendanceAPI.getAll({
+      start_date: startDate,
+      end_date: endDate,
+    });
+    const allRecords = attendanceData.results;
+
+    // Calculate employee-wise reports
+    const empReports: EmployeeReport[] = employeeData.slice(0, 10).map(emp => {
+      const empRecords = allRecords.filter(r => r.employee === emp.id);
+      const present = empRecords.filter(r => r.status === 'present').length;
+      const absent = empRecords.filter(r => r.status === 'absent').length;
+      const late = empRecords.filter(r => r.status === 'late').length;
+      const total = empRecords.length;
+      
+      const dept = departments.find(d => d.id === emp.dept);
+      
+      return {
+        id: emp.id,
+        name: emp.full_name,
+        department: dept?.dept_name || emp.department_name,
+        daysPresent: present,
+        daysAbsent: absent,
+        lateDays: late,
+        totalDays: total,
+        attendanceRate: total > 0 ? Math.round((present / total) * 100) : 0,
+      };
+    });
+    setEmployeeReports(empReports);
+
+    // Calculate summary stats from department data
+    const totalEmployees = deptAttendanceResponse.data.reduce(
+      (sum: number, dept: DepartmentAttendanceStats) => sum + dept.total_employees, 
+      0
+    );
+    const totalPresent = deptAttendanceResponse.data.reduce(
+      (sum: number, dept: DepartmentAttendanceStats) => sum + dept.present_count, 
+      0
+    );
+    const totalRecords = deptAttendanceResponse.data.reduce(
+      (sum: number, dept: DepartmentAttendanceStats) => sum + dept.total_records, 
+      0
+    );
+    const avgAttendance = totalRecords > 0 
+      ? Math.round((totalPresent / totalRecords) * 100) 
+      : 0;
+
+    const totalOvertime = deptAttendanceResponse.data.reduce(
+      (sum: number, dept: DepartmentAttendanceStats) => sum + dept.total_overtime, 
+      0
+    );
+
+    const leaveDays = deptAttendanceResponse.data.reduce(
+      (sum: number, dept: DepartmentAttendanceStats) => sum + dept.on_leave_count, 
+      0
+    );
+
+    setSummaryStats({
+      totalEmployees: empStats.active_employees,
+      avgAttendance,
+      totalOvertime: Math.round(totalOvertime),
+      leaveDays,
+    });
+  };
+
+  const fetchUserReports = async () => {
+    if (!currentUser?.id) {
+      throw new Error('User not logged in');
+    }
+
+    const { startDate, endDate } = getDateRange();
+
+    // Fetch employee data and attendance for current user
+    const userData = await employeeAPI.getAttendanceDataById(currentUser.id, {
+      start_date: startDate,
+      end_date: endDate,
+    });
+    
+    if (!userData.success) {
+      throw new Error('Failed to fetch user data');
+    }
+    
+    setCurrentEmployee(userData.employee);
+    setUserAttendanceRecords(userData.attendance_records);
+
+    // Calculate user attendance statistics
+    const records = userData.attendance_records;
+    const totalDays = records.length;
+    const presentDays = records.filter(r => r.status === 'present').length;
+    const absentDays = records.filter(r => r.status === 'absent').length;
+    const lateDays = records.filter(r => r.status === 'late').length;
+    const leaveDays = records.filter(r => r.status === 'on_leave').length;
+    const attendanceRate = totalDays > 0 
+      ? Math.round((presentDays / totalDays) * 100) 
+      : 0;
+
+    // Get last 7 or 30 days of user's attendance for trend
+    const days = dateRange === 'this-week' ? 7 : 30;
+    const selectedRecords = records.slice(0, days).reverse();
+    const userTrend: TrendData[] = selectedRecords.map(record => ({
+      date: record.date,
+      present: record.status === 'present' ? 1 : 0,
+      absent: record.status === 'absent' ? 1 : 0,
+      late: record.status === 'late' ? 1 : 0,
+      on_leave: record.status === 'on_leave' ? 1 : 0,
+    }));
+    setAttendanceTrend(userTrend);
+
+    // Set user's report as the only entry
+    const dept = departments.find(d => d.id === userData.employee.dept);
+    const userReport: EmployeeReport = {
+      id: userData.employee.id,
+      name: userData.employee.full_name,
+      department: dept?.dept_name || userData.employee.department_name,
+      daysPresent: presentDays,
+      daysAbsent: absentDays,
+      lateDays: lateDays,
+      totalDays: totalDays,
+      attendanceRate: attendanceRate,
+    };
+    setEmployeeReports([userReport]);
+
+    // Calculate overtime for user
+    const totalOvertime = records.reduce((sum, record) => 
+      sum + (record.overtime || 0), 0
+    );
+
+    // Set summary stats for user
+    setSummaryStats({
+      totalEmployees: 1, // Only user
+      avgAttendance: attendanceRate,
+      totalOvertime: Math.round(totalOvertime),
+      leaveDays: leaveDays,
+    });
+
+    // ✅ NEW: Fetch user's department attendance from API
+    if (userData.employee.dept) {
+      try {
+        const deptAttendanceResponse = await attendanceAPI.getByDepartment({
+          start_date: startDate,
+          end_date: endDate,
+        });
+
+        // Find the user's department in the response
+        const userDepartmentData = deptAttendanceResponse.data.find(
+          (deptData: DepartmentAttendanceStats) => deptData.department_id === userData.employee.dept
+        );
+
+        if (userDepartmentData) {
+          const userDeptStat: DepartmentStat = {
+            name: userDepartmentData.department_name,
+            employees: userDepartmentData.total_employees,
+            present: userDepartmentData.present_count,
+            attendanceRate: userDepartmentData.attendance_rate,
+          };
+          setDepartmentStats([userDeptStat]);
+        } else {
+          // Fallback if department not found in API response
+          const userDeptStat: DepartmentStat = {
+            name: dept?.dept_name || userData.employee.department_name,
+            employees: 1,
+            present: presentDays,
+            attendanceRate: attendanceRate,
+          };
+          setDepartmentStats([userDeptStat]);
+        }
+      } catch (error) {
+        console.error('Error fetching department stats:', error);
+        // Fallback to user's own stats
+        const userDeptStat: DepartmentStat = {
+          name: dept?.dept_name || userData.employee.department_name,
+          employees: 1,
+          present: presentDays,
+          attendanceRate: attendanceRate,
+        };
+        setDepartmentStats([userDeptStat]);
+      }
     }
   };
 
@@ -199,6 +389,8 @@ export function Reports() {
       dateRange,
       department,
       format: exportFormat,
+      isAdmin,
+      userId: currentUser?.id,
     });
   };
 
@@ -241,8 +433,15 @@ export function Reports() {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">Reports</h2>
-          <p className="text-gray-500 mt-1">Generate and download attendance reports</p>
+          <h2 className="text-3xl font-bold text-gray-900">
+            {isAdmin ? 'Reports' : 'My Reports'}
+          </h2>
+          <p className="text-gray-500 mt-1">
+            {isAdmin 
+              ? 'Generate and download attendance reports' 
+              : 'View and download your attendance reports'
+            }
+          </p>
         </div>
         <Button 
           className="bg-blue-600 hover:bg-blue-700"
@@ -252,6 +451,30 @@ export function Reports() {
           Download Report
         </Button>
       </div>
+
+      {/* User Info Card (Non-Admin Only) */}
+      {!isAdmin && currentEmployee && (
+        <Card className="bg-gradient-to-r from-purple-500 to-purple-600 text-white">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
+                <span className="text-2xl font-bold text-purple-600">
+                  {getInitials(currentEmployee.full_name)}
+                </span>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold">{currentEmployee.full_name}</h3>
+                <p className="text-purple-100">Employee Code: {currentEmployee.employee_code}</p>
+                <p className="text-purple-100">{currentEmployee.department_name}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-3xl font-bold">{summaryStats.avgAttendance}%</p>
+                <p className="text-purple-100">Your Attendance Rate</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Report Filters */}
       <Card>
@@ -267,9 +490,15 @@ export function Reports() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="attendance-summary">Attendance Summary</SelectItem>
-                <SelectItem value="employee-attendance">Employee Attendance</SelectItem>
-                <SelectItem value="department-analysis">Department Analysis</SelectItem>
-                <SelectItem value="late-report">Late Report</SelectItem>
+                <SelectItem value="employee-attendance">
+                  {isAdmin ? 'Employee Attendance' : 'My Attendance'}
+                </SelectItem>
+                {isAdmin && (
+                  <>
+                    <SelectItem value="department-analysis">Department Analysis</SelectItem>
+                    <SelectItem value="late-report">Late Report</SelectItem>
+                  </>
+                )}
                 <SelectItem value="overtime-report">Overtime Report</SelectItem>
                 <SelectItem value="leave-report">Leave Report</SelectItem>
               </SelectContent>
@@ -291,22 +520,24 @@ export function Reports() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label>Department</Label>
-            <Select value={department} onValueChange={setDepartment}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Departments</SelectItem>
-                {departments.map(dept => (
-                  <SelectItem key={dept.id} value={dept.id.toString()}>
-                    {dept.dept_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {isAdmin && (
+            <div className="space-y-2">
+              <Label>Department</Label>
+              <Select value={department} onValueChange={setDepartment}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Departments</SelectItem>
+                  {departments.map(dept => (
+                    <SelectItem key={dept.id} value={dept.id.toString()}>
+                      {dept.dept_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="space-y-2">
             <Label>Format</Label>
             <Select value={exportFormat} onValueChange={setExportFormat}>
@@ -331,7 +562,7 @@ export function Reports() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg font-medium text-gray-900 flex items-center gap-2">
                 <BarChart3 className="w-5 h-5" />
-                Attendance Trend
+                {isAdmin ? 'Attendance Trend' : 'My Attendance Trend'}
               </CardTitle>
             </div>
           </CardHeader>
@@ -370,22 +601,49 @@ export function Reports() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg font-medium text-gray-900 flex items-center gap-2">
                 <Users className="w-5 h-5" />
-                Department Attendance Rate
+                {isAdmin ? 'Department Attendance Rate' : 'My Department Attendance'}
               </CardTitle>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={departmentStats}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} unit="%" />
-                  <Tooltip formatter={(value: number) => [`${value}%`, 'Attendance Rate']} />
-                  <Bar dataKey="attendanceRate" fill="#3b82f6" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {departmentStats.length > 0 ? (
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={departmentStats}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} unit="%" />
+                    <Tooltip formatter={(value: number) => [`${value}%`, 'Attendance Rate']} />
+                    <Bar dataKey="attendanceRate" fill="#3b82f6" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-80 flex items-center justify-center">
+                <div className="text-center">
+                  <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No department data available</p>
+                </div>
+              </div>
+            )}
+            {!isAdmin && departmentStats.length > 0 && (
+              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">Department Overview</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {departmentStats[0].employees} employees · {departmentStats[0].present} present
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-blue-600">
+                      {departmentStats[0].attendanceRate}%
+                    </p>
+                    <p className="text-xs text-gray-500">Attendance Rate</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -396,7 +654,7 @@ export function Reports() {
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium text-gray-500 flex items-center gap-2">
               <Users className="w-4 h-4" />
-              Total Employees
+              {isAdmin ? 'Total Employees' : 'Total Working Days'}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -408,7 +666,7 @@ export function Reports() {
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium text-gray-500 flex items-center gap-2">
               <UserCheck className="w-4 h-4" />
-              Average Attendance
+              {isAdmin ? 'Average Attendance' : 'My Attendance Rate'}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -421,7 +679,7 @@ export function Reports() {
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium text-gray-500 flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              Total Overtime
+              {isAdmin ? 'Total Overtime' : 'My Overtime'}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -434,7 +692,7 @@ export function Reports() {
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium text-gray-500 flex items-center gap-2">
               <Calendar className="w-4 h-4" />
-              Leave Days
+              {isAdmin ? 'Leave Days' : 'My Leave Days'}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -449,7 +707,7 @@ export function Reports() {
         <CardHeader>
           <CardTitle className="text-lg font-medium text-gray-900 flex items-center gap-2">
             <FileText className="w-5 h-5" />
-            Report Preview
+            {isAdmin ? 'Report Preview' : 'My Attendance Report'}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -457,7 +715,9 @@ export function Reports() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-900">Employee</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-900">
+                    {isAdmin ? 'Employee' : 'Date Range'}
+                  </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-900">Department</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-900">Days Present</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-900">Days Absent</th>

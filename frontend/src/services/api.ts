@@ -1,10 +1,7 @@
 // const API_BASE_URL = 'http://localhost:8000/api';
 const API_BASE_URL = 'http://192.168.1.83:8000/api';  // ✅ Replace with YOUR IP
 
-
-
 // ==================== INTERFACES ====================
-
 
 interface AttendanceRecord {
   id: number;
@@ -24,7 +21,6 @@ interface AttendanceRecord {
   updated_at: string;
 }
 
-
 interface AttendanceStats {
   present: number;
   absent: number;
@@ -33,7 +29,6 @@ interface AttendanceStats {
   total_records: number;
 }
 
-
 interface TrendData {
   date: string;
   present: number;
@@ -41,7 +36,6 @@ interface TrendData {
   late: number;
   on_leave: number;
 }
-
 
 interface Employee {
   id: number;
@@ -63,7 +57,6 @@ interface Employee {
   updated_at: string;
 }
 
-
 interface EmployeeStats {
   total_employees: number;
   active_employees: number;
@@ -71,14 +64,12 @@ interface EmployeeStats {
   by_department: Array<{ dept__dept_name: string; count: number }>;
 }
 
-
 interface PaginatedResponse<T> {
   count: number;
   next: string | null;
   previous: string | null;
   results: T[];
 }
-
 
 interface User {
   id: number;
@@ -91,13 +82,11 @@ interface User {
   created_at: string;
 }
 
-
 interface AuthResponse {
   message: string;
   token: string;
   user: User;
 }
-
 
 interface RegisterData {
   username: string;
@@ -106,12 +95,10 @@ interface RegisterData {
   confirm_password: string;
 }
 
-
 interface LoginData {
   username: string;
   password: string;
 }
-
 
 // ✅ New interface for the attendance data response
 interface EmployeeAttendanceResponse {
@@ -121,10 +108,75 @@ interface EmployeeAttendanceResponse {
   total_attendance_count: number;
 }
 
+// ✅ New interfaces for department attendance
+interface DepartmentAttendanceStats {
+  department_id: number;
+  department_name: string;
+  location: string | null;
+  total_employees: number;
+  total_records: number;
+  present_count: number;
+  absent_count: number;
+  late_count: number;
+  on_leave_count: number;
+  attendance_rate: number;
+  average_hours: number;
+  total_overtime: number;
+}
 
+interface DepartmentSummary {
+  department_id: number;
+  department_name: string;
+  total_employees: number;
+  marked_attendance: number;
+  present: number;
+  absent: number;
+  late: number;
+  on_leave: number;
+  not_marked: number;
+  attendance_rate: number;
+}
+
+interface DepartmentComparison {
+  department_id: number;
+  department_name: string;
+  total_employees: number;
+  attendance_rate: number;
+  total_records: number;
+  present_count: number;
+  trend: number;
+  trend_direction: 'up' | 'down' | 'stable';
+}
+
+interface DepartmentAttendanceResponse {
+  success: boolean;
+  count: number;
+  data: DepartmentAttendanceStats[];
+  filters: {
+    start_date: string | null;
+    end_date: string | null;
+    status: string | null;
+  };
+}
+
+interface DepartmentSummaryResponse {
+  success: boolean;
+  date: string;
+  total_departments: number;
+  data: DepartmentSummary[];
+}
+
+interface DepartmentComparisonResponse {
+  success: boolean;
+  period: {
+    start_date: string;
+    end_date: string;
+    days: number;
+  };
+  data: DepartmentComparison[];
+}
 
 // ==================== HELPER FUNCTIONS ====================
-
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -133,7 +185,6 @@ const getAuthHeaders = () => {
     ...(token && { 'Authorization': `Bearer ${token}` }),
   };
 };
-
 
 const handleResponse = async (response: Response) => {
   if (response.status === 401) {
@@ -144,7 +195,6 @@ const handleResponse = async (response: Response) => {
     throw new Error('Authentication required');
   }
 
-
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
     throw new Error(error.error || error.detail || error.message || `HTTP error! status: ${response.status}`);
@@ -152,10 +202,7 @@ const handleResponse = async (response: Response) => {
   return response.json();
 };
 
-
-
 // ==================== AUTHENTICATION API ====================
-
 
 export const authAPI = {
   // Register new user
@@ -178,7 +225,6 @@ export const authAPI = {
     return result;
   },
 
-
   // Login user
   login: async (data: LoginData): Promise<AuthResponse> => {
     const response = await fetch(`${API_BASE_URL}/auth/login/`, {
@@ -199,7 +245,6 @@ export const authAPI = {
     return result;
   },
 
-
   // Logout user
   logout: async (): Promise<void> => {
     try {
@@ -214,7 +259,6 @@ export const authAPI = {
     }
   },
 
-
   // Get current user
   getCurrentUser: (): User | null => {
     const userStr = localStorage.getItem('user');
@@ -228,17 +272,13 @@ export const authAPI = {
     return null;
   },
 
-
   // Check if user is authenticated
   isAuthenticated: (): boolean => {
     return !!localStorage.getItem('token');
   },
 };
 
-
-
 // ==================== ATTENDANCE API ====================
-
 
 export const attendanceAPI = {
   // Get all attendance records
@@ -265,7 +305,6 @@ export const attendanceAPI = {
     return handleResponse(response);
   },
 
-
   // Get single attendance record
   getById: async (id: number): Promise<AttendanceRecord> => {
     const response = await fetch(`${API_BASE_URL}/attendance/${id}/`, {
@@ -273,7 +312,6 @@ export const attendanceAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Create attendance record
   create: async (data: Partial<AttendanceRecord>): Promise<AttendanceRecord> => {
@@ -285,7 +323,6 @@ export const attendanceAPI = {
     return handleResponse(response);
   },
 
-
   // Update attendance record
   update: async (id: number, data: Partial<AttendanceRecord>): Promise<AttendanceRecord> => {
     const response = await fetch(`${API_BASE_URL}/attendance/${id}/`, {
@@ -295,7 +332,6 @@ export const attendanceAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Delete attendance record
   delete: async (id: number): Promise<void> => {
@@ -308,7 +344,6 @@ export const attendanceAPI = {
     }
   },
 
-
   // Get today's attendance stats
   getTodayStats: async (): Promise<AttendanceStats> => {
     const response = await fetch(`${API_BASE_URL}/attendance/today_stats/`, {
@@ -316,7 +351,6 @@ export const attendanceAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Get attendance trend
   getTrend: async (days: number = 7): Promise<TrendData[]> => {
@@ -329,7 +363,6 @@ export const attendanceAPI = {
     return handleResponse(response);
   },
 
-
   // Get attendance by employee
   getByEmployee: async (employeeId: number): Promise<AttendanceRecord[]> => {
     const response = await fetch(
@@ -340,12 +373,50 @@ export const attendanceAPI = {
     );
     return handleResponse(response);
   },
+
+  // ✅ NEW: Get attendance statistics by department
+  getByDepartment: async (params?: {
+    start_date?: string;
+    end_date?: string;
+    status?: string;
+  }): Promise<DepartmentAttendanceResponse> => {
+    const queryString = params 
+      ? '?' + new URLSearchParams(
+          Object.entries(params)
+            .filter(([_, value]) => value !== undefined && value !== null)
+            .map(([key, value]) => [key, String(value)])
+        ).toString() 
+      : '';
+    
+    const response = await fetch(`${API_BASE_URL}/attendance/by-department/${queryString}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(response);
+  },
+
+  // ✅ NEW: Get department attendance summary for a specific date
+  getDepartmentSummary: async (date?: string): Promise<DepartmentSummaryResponse> => {
+    const queryString = date ? `?date=${date}` : '';
+    
+    const response = await fetch(`${API_BASE_URL}/attendance/department-summary/${queryString}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(response);
+  },
+
+  // ✅ NEW: Get department comparison over time
+  getDepartmentComparison: async (days: number = 30): Promise<DepartmentComparisonResponse> => {
+    const response = await fetch(
+      `${API_BASE_URL}/attendance/department-comparison/?days=${days}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    );
+    return handleResponse(response);
+  },
 };
 
-
-
 // ==================== EMPLOYEE API ====================
-
 
 export const employeeAPI = {
   // Get all employees
@@ -369,7 +440,6 @@ export const employeeAPI = {
     return handleResponse(response);
   },
 
-
   // Get active employees only
   getActive: async (): Promise<Employee[]> => {
     const response = await fetch(`${API_BASE_URL}/employees/active/`, {
@@ -377,7 +447,6 @@ export const employeeAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Get employee statistics
   getStats: async (): Promise<EmployeeStats> => {
@@ -387,7 +456,6 @@ export const employeeAPI = {
     return handleResponse(response);
   },
 
-
   // Get single employee
   getById: async (id: number): Promise<Employee> => {
     const response = await fetch(`${API_BASE_URL}/employees/${id}/`, {
@@ -395,7 +463,6 @@ export const employeeAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Create employee
   create: async (data: Partial<Employee>): Promise<Employee> => {
@@ -407,7 +474,6 @@ export const employeeAPI = {
     return handleResponse(response);
   },
 
-
   // Update employee
   update: async (id: number, data: Partial<Employee>): Promise<Employee> => {
     const response = await fetch(`${API_BASE_URL}/employees/${id}/`, {
@@ -417,7 +483,6 @@ export const employeeAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Delete employee (soft delete)
   delete: async (id: number): Promise<void> => {
@@ -430,7 +495,6 @@ export const employeeAPI = {
     }
   },
 
-
   // Activate employee
   activate: async (id: number): Promise<Employee> => {
     const response = await fetch(`${API_BASE_URL}/employees/${id}/activate/`, {
@@ -440,7 +504,6 @@ export const employeeAPI = {
     return handleResponse(response);
   },
 
-
   // Deactivate employee
   deactivate: async (id: number): Promise<Employee> => {
     const response = await fetch(`${API_BASE_URL}/employees/${id}/deactivate/`, {
@@ -449,7 +512,6 @@ export const employeeAPI = {
     });
     return handleResponse(response);
   },
-
 
   // Get employees by department
   getByDepartment: async (deptId: number): Promise<Employee[]> => {
@@ -461,7 +523,6 @@ export const employeeAPI = {
     );
     return handleResponse(response);
   },
-
 
   // ✅ Get employee with attendance data by user ID
   getAttendanceDataById: async (userId: number, params?: {
@@ -485,10 +546,7 @@ export const employeeAPI = {
   },
 };
 
-
-
 // ==================== EXPORTS ====================
-
 
 export type { 
   AttendanceRecord, 
@@ -501,5 +559,12 @@ export type {
   AuthResponse,
   RegisterData,
   LoginData,
-  EmployeeAttendanceResponse,  // ✅ Export new interface
+  EmployeeAttendanceResponse,
+  // ✅ Export new department interfaces
+  DepartmentAttendanceStats,
+  DepartmentSummary,
+  DepartmentComparison,
+  DepartmentAttendanceResponse,
+  DepartmentSummaryResponse,
+  DepartmentComparisonResponse,
 };
