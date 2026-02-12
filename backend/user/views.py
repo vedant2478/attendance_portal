@@ -2,7 +2,7 @@ import json
 import pickle
 import secrets
 from datetime import date
-from attendance.models import  Attendance  
+from attendance.models import Attendance  
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -10,15 +10,17 @@ from rest_framework.permissions import AllowAny
 from django.db.models import Q, Count, F
 from django.utils import timezone
 from attendance.serializers import AttendanceSerializer 
-
+from django.db import transaction
 from .models import Employee, Department, User
 from .serializers import (
     EmployeeSerializer,
     EmployeeListSerializer,
+    EmployeeCreateSerializer,
     UserRegistrationSerializer,
     UserLoginSerializer,
     UserSerializer,
 )
+
 
 
 def generate_token():
@@ -26,7 +28,9 @@ def generate_token():
     return secrets.token_urlsafe(32)
 
 
+
 # ==================== AUTHENTICATION VIEWSET ====================
+
 
 class AuthViewSet(viewsets.GenericViewSet):
     """Authentication endpoints for register and login"""
@@ -101,7 +105,9 @@ class AuthViewSet(viewsets.GenericViewSet):
         }, status=status.HTTP_200_OK)
 
 
+
 # ==================== EMPLOYEE VIEWSET ====================
+
 
 class EmployeeViewSet(viewsets.ModelViewSet):
     """CRUD operations for employees"""
@@ -141,13 +147,210 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         
         return queryset
     
+    def create(self, request, *args, **kwargs):
+        """
+        Create a new employee with validation
+        POST /api/employees/
+        Body: {
+            "first_name": "Amit",
+            "last_name": "Sharma",
+            "email": "amit@company.com",
+            "mobile_number": "+919876543210",
+            "employee_code": "EMP001",
+            "dept": 1,
+            "user": 5
+        }
+        """
+        serializer = EmployeeCreateSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            try:
+                with transaction.atomic():
+                    employee = serializer.save()
+                    
+                return Response({
+                    'success': True,
+                    'message': 'Employee created successfully',
+                    'data': EmployeeSerializer(employee).data
+                }, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response({
+                    'success': False,
+                    'error': f'Failed to create employee: {str(e)}'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response({
+            'success': False,
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    def update(self, request, *args, **kwargs):
+        """
+        Update an existing employee
+        PUT /api/employees/{id}/
+        PATCH /api/employees/{id}/
+        """
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = EmployeeCreateSerializer(instance, data=request.data, partial=partial)
+        
+        if serializer.is_valid():
+            try:
+                with transaction.atomic():
+                    employee = serializer.save()
+                    
+                return Response({
+                    'success': True,
+                    'message': 'Employee updated successfully',
+                    'data': EmployeeSerializer(employee).data
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({
+                    'success': False,
+                    'error': f'Failed to update employee: {str(e)}'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response({
+            'success': False,
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
     def destroy(self, request, *args, **kwargs):
         """Soft delete instead of hard delete"""
         instance = self.get_object()
         instance.deleted_at = timezone.now()
         instance.is_active = 0
         instance.save()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({
+            'success': True,
+            'message': 'Employee deleted successfully'
+        }, status=status.HTTP_200_OK)
+    
+    # ==================== DROPDOWN DATA ENDPOINT ====================
+    
+    @action(detail=False, methods=['get'])
+    def dropdown_data(self, request):
+        """
+        Get dropdown data for employee form
+        GET /api/employees/dropdown_data/
+        GET /api/employees/dropdown_data/?employee_id=5 (for editing)
+        
+        Returns users NOT linked to employees.
+        If employee_id is provided, includes that employee's current user.
+        """
+        # Get all active departments
+        departments = Department.objects.filter(
+            deleted_at__isnull=True
+        ).order_by('dept_name')
+        
+        dept_data = [{
+            'id': dept.id,
+            'dept_name': dept.dept_name,
+            'location': dept.location,
+            'manager_name': dept.manager_name,
+            'contact_number': dept.contact_number
+        } for dept in departments]
+        
+        # Get employee_id from query params (for edit mode)
+        employee_id = request.query_params.get('employee_id')
+        current_user_id = None
+        
+        if employee_id:
+            try:
+                employee = Employee.objects.get(id=employee_id, deleted_at__isnull=True)
+                current_user_id = employee.user_id if employee.user else None
+            except Employee.DoesNotExist:
+                pass
+        
+        # Get user IDs that are already linked to employees
+        linked_user_ids = Employee.objects.filter(
+            deleted_at__isnull=True,
+            user__isnull=False
+        ).values_list('user_id', flat=True)
+        
+        # Get only users that are NOT linked to any employee
+        # But include the current user if editing
+        users_query = User.objects.filter(
+            is_active=1,
+            deleted_at__isnull=True
+        ).select_related('role')
+        
+        if current_user_id:
+            # Include unlinked users OR the current user
+            users_query = users_query.filter(
+                Q(id=current_user_id) | ~Q(id__in=linked_user_ids)
+            )
+        else:
+            # Only unlinked users
+            users_query = users_query.exclude(id__in=linked_user_ids)
+        
+        users = users_query.order_by('username')
+        
+        user_data = [{
+            'id': user.id,
+            'username': user.username,
+            'email': user.email if user.email else '',
+            'role': user.role.role_name if user.role else 'No Role',
+            'role_id': user.role.id if user.role else None,
+            'is_current': user.id == current_user_id if current_user_id else False
+        } for user in users]
+        
+        return Response({
+            'success': True,
+            'data': {
+                'departments': dept_data,
+                'users': user_data
+            },
+            'counts': {
+                'departments': len(dept_data),
+                'available_users': len(user_data),
+                'total_users': User.objects.filter(is_active=1, deleted_at__isnull=True).count(),
+                'linked_users': len(linked_user_ids)
+            }
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['get'])
+    def check_user_available(self, request, pk=None):
+        """
+        Check if a user is available for linking (not already linked to another employee)
+        GET /api/employees/{user_id}/check_user_available/
+        """
+        try:
+            user = User.objects.get(pk=pk, is_active=1, deleted_at__isnull=True)
+        except User.DoesNotExist:
+            return Response({
+                'success': False,
+                'available': False,
+                'error': 'User not found or inactive'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check if user is already linked
+        existing_link = Employee.objects.filter(
+            user=user,
+            deleted_at__isnull=True
+        ).first()
+        
+        if existing_link:
+            return Response({
+                'success': True,
+                'available': False,
+                'message': f'User already linked to employee: {existing_link.first_name} {existing_link.last_name}',
+                'linked_employee': {
+                    'id': existing_link.id,
+                    'name': f'{existing_link.first_name} {existing_link.last_name}',
+                    'employee_code': existing_link.employee_code
+                }
+            })
+        
+        return Response({
+            'success': True,
+            'available': True,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email
+            }
+        })
     
     # ==================== EMPLOYEE STATUS ENDPOINTS ====================
     
@@ -210,7 +413,11 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         employee.deleted_at = None
         employee.save()
         serializer = self.get_serializer(employee)
-        return Response(serializer.data)
+        return Response({
+            'success': True,
+            'message': 'Employee activated successfully',
+            'data': serializer.data
+        })
     
     @action(detail=True, methods=['patch'])
     def deactivate(self, request, pk=None):
@@ -222,7 +429,11 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         employee.is_active = 0
         employee.save()
         serializer = self.get_serializer(employee)
-        return Response(serializer.data)
+        return Response({
+            'success': True,
+            'message': 'Employee deactivated successfully',
+            'data': serializer.data
+        })
     
     # ==================== DEPARTMENT ENDPOINTS ====================
     
@@ -626,6 +837,9 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             'employee_id': employee.id,
             'employee_code': employee.employee_code
         }, status=status.HTTP_200_OK)
+    
+    # ==================== ATTENDANCE DATA ENDPOINT ====================
+    
     @action(detail=False, methods=['get'])
     def get_attendance_data_by_id(self, request):
         """
@@ -653,9 +867,6 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_404_NOT_FOUND)
         
         # Get all attendance records for this employee
-        from attendance.models import Attendance  # ✅ Import model from models
-        from attendance.serializers import AttendanceSerializer  # ✅ Import serializer from serializers
-        
         attendance_records = Attendance.objects.filter(
             employee=employee
         ).select_related('shift').order_by('-date')
@@ -678,16 +889,17 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         # Serialize attendance data
         attendance_serializer = AttendanceSerializer(attendance_records, many=True)
         
-        # ✅ Fix: Properly serialize user data to avoid Role serialization issue
+        # Properly serialize user data
+        user_data = {
+            'id': employee.user.id,
+            'username': employee.user.username,
+            'email': employee.user.email if employee.user.email else None,
+            'role_name': employee.user.role.role_name if employee.user.role else None,
+        }
+        
         return Response({
             'success': True,
-            'user': {
-                'id': employee.user.id,
-                'username': employee.user.username,
-                'email': employee.user.email if hasattr(employee.user, 'email') else None,
-                'role': employee.user.role if isinstance(employee.user.role, int) else employee.user.role.id if hasattr(employee.user.role, 'id') else None,
-                'role_name': str(employee.user.role_name) if hasattr(employee.user, 'role_name') else None,
-            },
+            'user': user_data,
             'employee': employee_serializer.data,
             'attendance_records': attendance_serializer.data,
             'total_attendance_count': attendance_records.count()

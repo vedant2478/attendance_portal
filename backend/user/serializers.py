@@ -247,3 +247,76 @@ class EmployeeListSerializer(serializers.ModelSerializer):
     
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}".strip()
+
+class EmployeeCreateSerializer(serializers.ModelSerializer):
+    """Serializer specifically for creating new employees"""
+    
+    class Meta:
+        model = Employee
+        fields = [
+            'first_name',
+            'last_name',
+            'email',
+            'mobile_number',
+            'employee_code',
+            'dept',
+            'user',
+            'photo_path',
+            'is_active',
+            'validity_from',
+            'validity_to',
+        ]
+        extra_kwargs = {
+            'first_name': {'required': True},
+            'last_name': {'required': True},
+            'email': {'required': True},
+            'mobile_number': {'required': True},
+            'employee_code': {'required': True},
+            'dept': {'required': True},
+        }
+    
+    def validate_email(self, value):
+        """Validate email uniqueness"""
+        if Employee.objects.filter(email=value, deleted_at__isnull=True).exists():
+            raise serializers.ValidationError("Employee with this email already exists.")
+        return value
+    
+    def validate_employee_code(self, value):
+        """Validate employee code uniqueness"""
+        if Employee.objects.filter(employee_code=value, deleted_at__isnull=True).exists():
+            raise serializers.ValidationError("Employee with this code already exists.")
+        return value
+    
+    def validate_dept(self, value):
+        """Validate that department exists and is active"""
+        if value and value.deleted_at is not None:
+            raise serializers.ValidationError("Selected department is not active.")
+        return value
+    
+    def validate_user(self, value):
+        """Validate that user exists, is active, and not linked to another employee"""
+        if value:
+            if value.is_active != 1:
+                raise serializers.ValidationError("Selected user is not active.")
+            
+            # Check if user is already linked to another employee
+            if Employee.objects.filter(user=value, deleted_at__isnull=True).exists():
+                raise serializers.ValidationError("This user is already linked to another employee.")
+        return value
+    
+    def validate(self, data):
+        """Cross-field validation"""
+        validity_from = data.get('validity_from')
+        validity_to = data.get('validity_to')
+        
+        if validity_from and validity_to:
+            if validity_to <= validity_from:
+                raise serializers.ValidationError({
+                    'validity_to': 'Validity end date must be after start date.'
+                })
+        
+        return data
+    
+    def to_representation(self, instance):
+        """Return detailed representation after creation"""
+        return EmployeeSerializer(instance).data

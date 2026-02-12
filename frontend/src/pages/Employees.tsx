@@ -51,6 +51,14 @@ interface Department {
   contact_number?: string;
 }
 
+interface User {
+  id: number;
+  username: string;
+  email: string;
+  role?: string;
+  is_current?: boolean;
+}
+
 interface EmployeeFormData {
   first_name: string;
   last_name: string;
@@ -58,11 +66,13 @@ interface EmployeeFormData {
   mobile_number: string;
   employee_code: string;
   dept: number | null;
+  user: number | null;
 }
 
 export function Employees() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +92,7 @@ export function Employees() {
     mobile_number: '',
     employee_code: '',
     dept: null,
+    user: null,
   });
 
   // Fetch employees, departments, and today's attendance
@@ -90,12 +101,25 @@ export function Employees() {
     fetchTodayAttendance();
   }, []);
 
+  // Fetch dropdown data when add dialog opens
+  useEffect(() => {
+    if (isAddDialogOpen) {
+      fetchDropdownData();
+    }
+  }, [isAddDialogOpen]);
+
+  // Fetch dropdown data when edit dialog opens
+  useEffect(() => {
+    if (isEditDialogOpen && selectedEmployee) {
+      fetchDropdownData(selectedEmployee.id);
+    }
+  }, [isEditDialogOpen, selectedEmployee]);
+
   const fetchTodayAttendance = async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
       const attendanceData = await attendanceAPI.getAll({ date: today });
       
-      // Create a set of employee IDs who have attendance today
       const employeeIds = new Set(
         attendanceData.results
           .filter(record => record.sign_in_time)
@@ -108,16 +132,45 @@ export function Employees() {
     }
   };
 
+  const fetchDropdownData = async (employeeId?: number) => {
+    try {
+      const url = employeeId 
+        ? `http://127.0.0.1:8000/api/employees/dropdown_data/?employee_id=${employeeId}`
+        : 'http://127.0.0.1:8000/api/employees/dropdown_data/';
+
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch dropdown data');
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        setDepartments(result.data.departments);
+        setUsers(result.data.users);
+      } else {
+        throw new Error('Invalid response format');
+      }
+    } catch (err) {
+      console.error('Error fetching dropdown data:', err);
+      toast.error('Failed to load departments and users');
+    }
+  };
+
   const fetchEmployeesAndDepartments = async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Fetch employees with department names included
       const employeeData = await employeeAPI.getAll();
       setEmployees(employeeData.results);
       
-      // Extract unique departments from employee data
       const deptMap = new Map<number, Department>();
       employeeData.results.forEach(emp => {
         if (emp.dept && emp.department_name) {
@@ -128,7 +181,6 @@ export function Employees() {
         }
       });
       
-      // Get full department stats for complete list
       try {
         const stats = await employeeAPI.getStats();
         stats.by_department.forEach(dept => {
@@ -170,7 +222,7 @@ export function Employees() {
       setError(null);
       const data = await employeeAPI.getAll();
       setEmployees(data.results);
-      await fetchTodayAttendance(); // Refresh attendance data
+      await fetchTodayAttendance();
     } catch (err) {
       console.error('Error fetching employees:', err);
       setError(err instanceof Error ? err.message : 'Failed to load employees');
@@ -206,6 +258,27 @@ export function Employees() {
     setFormData(prev => ({ ...prev, dept: parseInt(value) }));
   };
 
+  const handleUserChange = (value: string) => {
+    if (value === 'none') {
+      setFormData(prev => ({ ...prev, user: null }));
+    } else {
+      const userId = parseInt(value);
+      const selectedUser = users.find(u => u.id === userId);
+      
+      // Autofill email from selected user
+      setFormData(prev => ({ 
+        ...prev, 
+        user: userId,
+        email: selectedUser?.email || prev.email // Only update if user has email
+      }));
+      
+      // Show toast notification
+      if (selectedUser?.email) {
+        toast.success(`Email autofilled from user: ${selectedUser.email}`);
+      }
+    }
+  };
+
   const resetForm = () => {
     setFormData({
       first_name: '',
@@ -214,28 +287,55 @@ export function Employees() {
       mobile_number: '',
       employee_code: '',
       dept: null,
+      user: null,
     });
   };
 
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.first_name || !formData.last_name || !formData.email) {
+    if (!formData.first_name || !formData.last_name || !formData.email || !formData.mobile_number || !formData.employee_code || !formData.dept) {
       toast.error('Please fill in all required fields');
       return;
     }
 
     try {
       setSubmitting(true);
-      await employeeAPI.create({
-        ...formData,
-        is_active: 1,
-      });
       
-      toast.success('Employee added successfully');
-      setIsAddDialogOpen(false);
-      resetForm();
-      fetchEmployees();
+      const response = await fetch('http://127.0.0.1:8000/api/employees/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          first_name: formData.first_name,
+          last_name: formData.last_name,
+          email: formData.email,
+          mobile_number: formData.mobile_number,
+          employee_code: formData.employee_code,
+          dept: formData.dept,
+          user: formData.user,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        toast.success(result.message || 'Employee added successfully');
+        setIsAddDialogOpen(false);
+        resetForm();
+        fetchEmployees();
+      } else {
+        if (result.errors) {
+          const errorMessages = Object.entries(result.errors)
+            .map(([field, messages]) => `${field}: ${Array.isArray(messages) ? messages.join(', ') : messages}`)
+            .join('\n');
+          toast.error(errorMessages);
+        } else {
+          toast.error(result.error || 'Failed to add employee');
+        }
+      }
     } catch (err) {
       console.error('Error adding employee:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to add employee');
@@ -251,13 +351,42 @@ export function Employees() {
 
     try {
       setSubmitting(true);
-      await employeeAPI.update(selectedEmployee.id, formData);
       
-      toast.success('Employee updated successfully');
-      setIsEditDialogOpen(false);
-      setSelectedEmployee(null);
-      resetForm();
-      fetchEmployees();
+      const response = await fetch(`http://127.0.0.1:8000/api/employees/${selectedEmployee.id}/`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          first_name: formData.first_name,
+          last_name: formData.last_name,
+          email: formData.email,
+          mobile_number: formData.mobile_number,
+          employee_code: formData.employee_code,
+          dept: formData.dept,
+          user: formData.user,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        toast.success(result.message || 'Employee updated successfully');
+        setIsEditDialogOpen(false);
+        setSelectedEmployee(null);
+        resetForm();
+        fetchEmployees();
+      } else {
+        if (result.errors) {
+          const errorMessages = Object.entries(result.errors)
+            .map(([field, messages]) => `${field}: ${Array.isArray(messages) ? messages.join(', ') : messages}`)
+            .join('\n');
+          toast.error(errorMessages);
+        } else {
+          toast.error(result.error || 'Failed to update employee');
+        }
+      }
     } catch (err) {
       console.error('Error updating employee:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to update employee');
@@ -275,6 +404,7 @@ export function Employees() {
       mobile_number: employee.mobile_number || '',
       employee_code: employee.employee_code,
       dept: employee.dept,
+      user: employee.user || null,
     });
     setIsEditDialogOpen(true);
   };
@@ -357,14 +487,37 @@ export function Employees() {
               Add Employee
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add New Employee</DialogTitle>
               <DialogDescription>
-                Add a new employee to the system. They will receive login credentials via email.
+                Fill in the employee details below. All fields marked with * are required.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleAddEmployee} className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="user">User (Optional)</Label>
+                <Select 
+                  value={formData.user?.toString() || 'none'} 
+                  onValueChange={handleUserChange}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select user (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No User</SelectItem>
+                    {users.map(user => (
+                      <SelectItem key={user.id} value={user.id.toString()}>
+                        {user.username} ({user.email})
+                        {user.role && ` - ${user.role}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500">
+                  Link this employee to an existing user account. Email will be autofilled.
+                </p>
+              </div>
               <div className="grid gap-2">
                 <Label htmlFor="first_name">First Name *</Label>
                 <Input 
@@ -395,28 +548,37 @@ export function Employees() {
                   onChange={handleInputChange}
                   required
                 />
+                <p className="text-xs text-gray-500">
+                  {formData.user ? 'Autofilled from selected user' : 'Enter manually or select a user above'}
+                </p>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="mobile_number">Mobile Number</Label>
+                <Label htmlFor="mobile_number">Mobile Number *</Label>
                 <Input 
                   id="mobile_number" 
-                  placeholder="Enter mobile number"
+                  placeholder="e.g. +919876543210"
                   value={formData.mobile_number}
                   onChange={handleInputChange}
+                  required
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="employee_code">Employee Code</Label>
+                <Label htmlFor="employee_code">Employee Code *</Label>
                 <Input 
                   id="employee_code" 
-                  placeholder="Auto-generated if left empty"
+                  placeholder="e.g. 001"
                   value={formData.employee_code}
                   onChange={handleInputChange}
+                  required
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="dept">Department</Label>
-                <Select onValueChange={handleDepartmentChange}>
+                <Label htmlFor="dept">Department *</Label>
+                <Select 
+                  value={formData.dept?.toString() || ''} 
+                  onValueChange={handleDepartmentChange}
+                  required
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select department" />
                   </SelectTrigger>
@@ -424,6 +586,7 @@ export function Employees() {
                     {departments.map(dept => (
                       <SelectItem key={dept.id} value={dept.id.toString()}>
                         {dept.dept_name}
+                        {dept.location && ` - ${dept.location}`}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -450,7 +613,7 @@ export function Employees() {
 
       {/* Edit Employee Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Employee</DialogTitle>
             <DialogDescription>
@@ -458,6 +621,29 @@ export function Employees() {
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleEditEmployee} className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="user">User</Label>
+              <Select 
+                value={formData.user?.toString() || 'none'} 
+                onValueChange={handleUserChange}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select user (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No User</SelectItem>
+                  {users.map(user => (
+                    <SelectItem key={user.id} value={user.id.toString()}>
+                      {user.username} ({user.email})
+                      {user.is_current && ' (Current)'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">
+                Changing user will autofill the email field
+              </p>
+            </div>
             <div className="grid gap-2">
               <Label htmlFor="first_name">First Name *</Label>
               <Input 
@@ -490,16 +676,17 @@ export function Employees() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="mobile_number">Mobile Number</Label>
+              <Label htmlFor="mobile_number">Mobile Number *</Label>
               <Input 
                 id="mobile_number" 
                 placeholder="Enter mobile number"
                 value={formData.mobile_number}
                 onChange={handleInputChange}
+                required
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="employee_code">Employee Code</Label>
+              <Label htmlFor="employee_code">Employee Code *</Label>
               <Input 
                 id="employee_code" 
                 placeholder="Employee code"
@@ -509,10 +696,11 @@ export function Employees() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="dept">Department</Label>
+              <Label htmlFor="dept">Department *</Label>
               <Select 
-                value={formData.dept?.toString()} 
+                value={formData.dept?.toString() || ''} 
                 onValueChange={handleDepartmentChange}
+                required
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select department" />

@@ -12,7 +12,7 @@ import { Layout } from '@/components/Layout';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { NotFound } from '@/pages/NotFound';
 import { Unauthorized } from '@/pages/Unauthorized';
-import { getUserRole } from '@/utils/auth';
+
 
 function App() {
   return (
