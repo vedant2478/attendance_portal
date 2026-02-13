@@ -1,5 +1,5 @@
-// const API_BASE_URL = 'http://localhost:8000/api';
-const API_BASE_URL = 'http://localhost:8000/api';  // ✅ Replace with YOUR IP
+const API_BASE_URL = 'http://localhost:8000/api';
+// const API_BASE_URL = 'http://192.168.1.83:8000/api';/  // ✅ Replace with YOUR IP
 
 // ==================== INTERFACES ====================
 

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Role, User, Department, Employee, Notification
+from .models import LeaveRequest, Role, User, Department, Employee, Notification
 
 
 @admin.register(Role)
@@ -104,3 +104,158 @@ class NotificationAdmin(admin.ModelAdmin):
         updated = queryset.update(is_read=False)
         self.message_user(request, f'{updated} notification(s) marked as unread.')
     mark_as_unread.short_description = 'Mark selected as unread'
+
+
+@admin.register(LeaveRequest)
+class LeaveRequestAdmin(admin.ModelAdmin):
+    """Admin interface for Leave Requests"""
+    
+    # List display columns
+    list_display = [
+        'id',
+        'user_display',
+        'employee_display',
+        'leave_type_badge',
+        'from_date',
+        'to_date',
+        'total_days',
+        'status_badge',
+        'approver_display',
+        'created_at',
+    ]
+    
+    # Filters in sidebar
+    list_filter = [
+        'status',
+        'leave_type',
+        'from_date',
+        'to_date',
+        'created_at',
+    ]
+    
+    # Search fields
+    search_fields = [
+        'user__username',
+        'user__email',
+        'employee__first_name',
+        'employee__last_name',
+        'employee__employee_code',
+        'reason',
+    ]
+    
+    # Read-only fields
+    readonly_fields = [
+        'id',
+        'total_days',
+        'created_at',
+        'updated_at',
+        'deleted_at',
+    ]
+    
+    # Fieldsets for detail view
+    fieldsets = (
+        ('Employee Information', {
+            'fields': ('user', 'employee')
+        }),
+        ('Leave Details', {
+            'fields': ('leave_type', 'from_date', 'to_date', 'total_days', 'reason', 'attachment')
+        }),
+        ('Approval Information', {
+            'fields': ('status', 'approver', 'approved_by', 'approved_date', 'rejection_reason', 'comments')
+        }),
+        ('Metadata', {
+            'fields': ('id', 'created_at', 'updated_at', 'deleted_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    # Ordering
+    ordering = ['-created_at']
+    
+    # Items per page
+    list_per_page = 25
+    
+    # Date hierarchy
+    date_hierarchy = 'created_at'
+    
+    # Custom display methods
+    def user_display(self, obj):
+        """Display user with link"""
+        if obj.user:
+            return f"{obj.user.username} ({obj.user.email})"
+        return "-"
+    user_display.short_description = "User"
+    
+    def employee_display(self, obj):
+        """Display employee name and code"""
+        if obj.employee:
+            return f"{obj.employee.first_name} {obj.employee.last_name} ({obj.employee.employee_code})"
+        return "-"
+    employee_display.short_description = "Employee"
+    
+    def leave_type_badge(self, obj):
+        """Display leave type with color badge"""
+        colors = {
+            'sick': '🤒',
+            'casual': '😊',
+            'annual': '🌴',
+            'maternity': '👶',
+            'paternity': '👨‍👦',
+            'unpaid': '💰',
+            'compensatory': '⏰',
+            'emergency': '🚨',
+        }
+        icon = colors.get(obj.leave_type, '📄')
+        return f"{icon} {obj.get_leave_type_display()}"
+    leave_type_badge.short_description = "Leave Type"
+    
+    def status_badge(self, obj):
+        """Display status with color badge"""
+        badges = {
+            'pending': '🟡 Pending',
+            'approved': '✅ Approved',
+            'rejected': '❌ Rejected',
+            'cancelled': '⚫ Cancelled',
+        }
+        return badges.get(obj.status, obj.status)
+    status_badge.short_description = "Status"
+    
+    def approver_display(self, obj):
+        """Display approver name"""
+        if obj.approver:
+            return obj.approver.username
+        return "-"
+    approver_display.short_description = "Approver"
+    
+    # Custom actions
+    actions = ['approve_selected', 'reject_selected', 'cancel_selected']
+    
+    def approve_selected(self, request, queryset):
+        """Bulk approve leave requests"""
+        pending = queryset.filter(status='pending')
+        count = pending.update(
+            status='approved',
+            approved_by=request.user if hasattr(request, 'user') else None,
+            approved_date=timezone.now()
+        )
+        self.message_user(request, f'{count} leave request(s) approved successfully.')
+    approve_selected.short_description = "✅ Approve selected leave requests"
+    
+    def reject_selected(self, request, queryset):
+        """Bulk reject leave requests"""
+        pending = queryset.filter(status='pending')
+        count = pending.update(
+            status='rejected',
+            approved_by=request.user if hasattr(request, 'user') else None,
+            approved_date=timezone.now(),
+            rejection_reason='Bulk rejected by admin'
+        )
+        self.message_user(request, f'{count} leave request(s) rejected.')
+    reject_selected.short_description = "❌ Reject selected leave requests"
+    
+    def cancel_selected(self, request, queryset):
+        """Bulk cancel leave requests"""
+        pending = queryset.filter(status='pending')
+        count = pending.update(status='cancelled')
+        self.message_user(request, f'{count} leave request(s) cancelled.')
+    cancel_selected.short_description = "⚫ Cancel selected leave requests"

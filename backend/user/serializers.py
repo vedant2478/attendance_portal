@@ -1,10 +1,14 @@
 from rest_framework import serializers
 from django.contrib.auth.hashers import make_password, check_password
-from .models import Employee, Department, User, Role
+from django.utils import timezone
+from datetime import datetime, timedelta
+from .models import Employee, Department, User, Role, LeaveRequest, Notification
 import base64
 
 
+
 # ==================== AUTHENTICATION SERIALIZERS ====================
+
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
@@ -74,6 +78,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return user
 
 
+
 class UserLoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -88,7 +93,7 @@ class UserLoginSerializer(serializers.Serializer):
         
         try:
             user = User.objects.get(username=username)
-        except User.objects.DoesNotExist:
+        except User.DoesNotExist:
             raise serializers.ValidationError("Invalid username or password")
         
         # Check if user is active
@@ -101,6 +106,7 @@ class UserLoginSerializer(serializers.Serializer):
         
         data['user'] = user
         return data
+
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -121,7 +127,9 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'last_login_date']
 
 
+
 # ==================== DEPARTMENT SERIALIZER ====================
+
 
 class DepartmentSerializer(serializers.ModelSerializer):
     """Nested serializer for Department"""
@@ -130,7 +138,9 @@ class DepartmentSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+
 # ==================== EMPLOYEE SERIALIZERS ====================
+
 
 class EmployeeSerializer(serializers.ModelSerializer):
     # Read-only fields for displaying related data
@@ -224,6 +234,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
         return data
 
 
+
 class EmployeeListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views"""
     department_name = serializers.CharField(source='dept.dept_name', read_only=True)
@@ -241,12 +252,14 @@ class EmployeeListSerializer(serializers.ModelSerializer):
             'employee_code',
             'dept',
             'department_name',
+            'user',
             'is_active',
             'created_at',
         ]
     
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}".strip()
+
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):
     """Serializer specifically for creating new employees"""
@@ -300,7 +313,11 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Selected user is not active.")
             
             # Check if user is already linked to another employee
-            if Employee.objects.filter(user=value, deleted_at__isnull=True).exists():
+            existing = Employee.objects.filter(user=value, deleted_at__isnull=True)
+            if self.instance:
+                existing = existing.exclude(id=self.instance.id)
+            
+            if existing.exists():
                 raise serializers.ValidationError("This user is already linked to another employee.")
         return value
     
@@ -320,3 +337,311 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         """Return detailed representation after creation"""
         return EmployeeSerializer(instance).data
+
+
+
+# ==================== LEAVE REQUEST SERIALIZERS ====================
+
+class LeaveRequestSerializer(serializers.ModelSerializer):
+    """Serializer for viewing leave requests"""
+    user_name = serializers.CharField(source='user.username', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    employee_name = serializers.SerializerMethodField(read_only=True)
+    employee_code = serializers.CharField(source='employee.employee_code', read_only=True, allow_null=True)
+    approver_name = serializers.CharField(source='approver.username', read_only=True, allow_null=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True, allow_null=True)
+    leave_type_display = serializers.CharField(source='get_leave_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            'id',
+            'user',
+            'user_name',
+            'user_email',
+            'employee',
+            'employee_name',
+            'employee_code',
+            'leave_type',
+            'leave_type_display',
+            'from_date',
+            'to_date',
+            'total_days',
+            'reason',
+            'status',
+            'status_display',
+            'approver',
+            'approver_name',
+            'approved_by',
+            'approved_by_name',
+            'approved_date',
+            'rejection_reason',
+            'attachment',
+            'comments',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id', 
+            'total_days', 
+            'status', 
+            'approved_by', 
+            'approved_date', 
+            'rejection_reason',
+            'comments',
+            'created_at', 
+            'updated_at'
+        ]
+    
+    def get_employee_name(self, obj):
+        """Get full employee name"""
+        if obj.employee:
+            return f"{obj.employee.first_name} {obj.employee.last_name}"
+        return None
+
+
+class LeaveRequestCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating/applying for leave"""
+    
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            'user',
+            'leave_type',
+            'from_date',
+            'to_date',
+            'reason',
+            'approver',
+            'attachment',
+        ]
+    
+    def validate_from_date(self, value):
+        """Validate that from_date is not in the past"""
+        today = timezone.now().date()
+        if value < today:
+            raise serializers.ValidationError("Leave cannot be applied for past dates")
+        return value
+    
+    def validate(self, data):
+        """Cross-field validation"""
+        from_date = data.get('from_date')
+        to_date = data.get('to_date')
+        user = data.get('user')
+        approver = data.get('approver')
+        
+        # Validate date range
+        if from_date and to_date:
+            if to_date < from_date:
+                raise serializers.ValidationError({
+                    'to_date': 'End date must be after or equal to start date'
+                })
+            
+            # Check if date range is too long (optional - max 30 days)
+            delta = to_date - from_date
+            if delta.days > 30:
+                raise serializers.ValidationError({
+                    'to_date': 'Leave period cannot exceed 30 days. Please split into multiple requests.'
+                })
+        
+        # Validate user exists and is active
+        if user:
+            if user.is_active != 1:
+                raise serializers.ValidationError({
+                    'user': 'User account is inactive'
+                })
+        
+        # Validate approver exists and is active
+        if approver:
+            if approver.is_active != 1:
+                raise serializers.ValidationError({
+                    'approver': 'Selected approver is inactive'
+                })
+            
+            # Check if approver has appropriate role (HR, Admin, Manager)
+            if approver.role:
+                allowed_roles = ['admin', 'hr', 'manager']
+                if approver.role.role_name.lower() not in allowed_roles:
+                    raise serializers.ValidationError({
+                        'approver': 'Selected user does not have approval permissions. Must be Admin, HR, or Manager.'
+                    })
+            else:
+                raise serializers.ValidationError({
+                    'approver': 'Selected approver has no role assigned'
+                })
+        
+        # Check for overlapping leave requests
+        if from_date and to_date and user:
+            overlapping = LeaveRequest.objects.filter(
+                user=user,
+                status__in=['pending', 'approved'],
+                deleted_at__isnull=True
+            ).filter(
+                from_date__lte=to_date,
+                to_date__gte=from_date
+            )
+            
+            if self.instance:
+                overlapping = overlapping.exclude(id=self.instance.id)
+            
+            if overlapping.exists():
+                raise serializers.ValidationError(
+                    'You already have a leave request for overlapping dates'
+                )
+        
+        return data
+    
+    def create(self, validated_data):
+        """Create leave request with default status as pending"""
+        # Auto-link employee if exists
+        user = validated_data.get('user')
+        try:
+            employee = Employee.objects.get(user=user, deleted_at__isnull=True)
+            validated_data['employee'] = employee
+        except Employee.DoesNotExist:
+            pass
+        
+        # Set default status
+        validated_data['status'] = 'pending'
+        
+        leave_request = LeaveRequest.objects.create(**validated_data)
+        
+        # Create notification for approver
+        if leave_request.approver:
+            try:
+                Notification.objects.create(
+                    user=leave_request.approver,
+                    title='New Leave Request',
+                    body=f'{user.username} has requested {leave_request.get_leave_type_display()} from {leave_request.from_date} to {leave_request.to_date}',
+                    page='/leave-requests'
+                )
+            except Exception as e:
+                # Don't fail the request if notification creation fails
+                print(f"Warning: Failed to create notification: {str(e)}")
+        
+        return leave_request
+    
+    def to_representation(self, instance):
+        """Return detailed representation after creation"""
+        return LeaveRequestSerializer(instance).data
+
+
+class LeaveApprovalSerializer(serializers.Serializer):
+    """Serializer for approving/rejecting leave requests"""
+    action = serializers.ChoiceField(
+        choices=['approve', 'reject'], 
+        required=True,
+        help_text="Action to perform: 'approve' or 'reject'"
+    )
+    comments = serializers.CharField(
+        required=False, 
+        allow_blank=True,
+        max_length=500,
+        help_text="Optional comments from approver"
+    )
+    rejection_reason = serializers.CharField(
+        required=False, 
+        allow_blank=True,
+        max_length=500,
+        help_text="Required if action is 'reject'"
+    )
+    
+    def validate(self, data):
+        """Validate that rejection_reason is provided when rejecting"""
+        action = data.get('action')
+        rejection_reason = data.get('rejection_reason', '').strip()
+        
+        # If rejecting, rejection_reason is required
+        if action == 'reject' and not rejection_reason:
+            raise serializers.ValidationError({
+                'rejection_reason': 'Rejection reason is required when rejecting a leave request'
+            })
+        
+        return data
+
+
+class LeaveRequestListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for listing leave requests"""
+    user_name = serializers.CharField(source='user.username', read_only=True)
+    employee_name = serializers.SerializerMethodField(read_only=True)
+    leave_type_display = serializers.CharField(source='get_leave_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    approver_name = serializers.CharField(source='approver.username', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            'id',
+            'user',
+            'user_name',
+            'employee_name',
+            'leave_type',
+            'leave_type_display',
+            'from_date',
+            'to_date',
+            'total_days',
+            'status',
+            'status_display',
+            'approver',
+            'approver_name',
+            'created_at',
+        ]
+    
+    def get_employee_name(self, obj):
+        """Get full employee name"""
+        if obj.employee:
+            return f"{obj.employee.first_name} {obj.employee.last_name}"
+        return None
+
+
+class LeaveStatsSerializer(serializers.Serializer):
+    """Serializer for leave statistics"""
+    total_leaves = serializers.IntegerField()
+    pending_leaves = serializers.IntegerField()
+    approved_leaves = serializers.IntegerField()
+    rejected_leaves = serializers.IntegerField()
+    cancelled_leaves = serializers.IntegerField()
+    total_days_approved = serializers.IntegerField()
+    total_days_pending = serializers.IntegerField()
+    by_leave_type = serializers.ListField()
+
+
+class ApproverSerializer(serializers.ModelSerializer):
+    """Serializer for listing approvers (Admin, HR, Manager)"""
+    role = serializers.SerializerMethodField()
+    role_id = serializers.IntegerField(source='role.id', read_only=True)
+    role_name = serializers.CharField(source='role.role_name', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 
+            'username', 
+            'email',
+            'full_name',
+            'role', 
+            'role_id', 
+            'role_name',
+            'is_active',
+            'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+    
+    def get_role(self, obj):
+        """Get role name as a simple string"""
+        if hasattr(obj, 'role') and obj.role:
+            return obj.role.role_name
+        return None
+    
+    def get_full_name(self, obj):
+        """Get full name from linked employee or return username"""
+        try:
+            # Check if user has linked employee
+            if hasattr(obj, 'employee') and obj.employee:
+                full_name = f"{obj.employee.first_name} {obj.employee.last_name}".strip()
+                if full_name:
+                    return full_name
+        except Exception:
+            pass
+        return obj.username
